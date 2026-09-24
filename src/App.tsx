@@ -4,33 +4,48 @@ import { TragamonedasPage } from './pages/TragamonedasPage';
 import { BoardApp } from './BoardApp';
 import './App.css';
 
+type Route = '/' | '/caja' | '/tragamonedas';
+
 function normalizePath(raw: string): string {
-  let p = raw;
-  const hashIdx = p.indexOf('#');
-  if (hashIdx >= 0) p = p.slice(0, hashIdx);
+  let p = (raw ?? '/').trim();
+  if (!p.length) p = '/';
   const qIdx = p.indexOf('?');
   if (qIdx >= 0) p = p.slice(0, qIdx);
   p = p.toLowerCase();
-  if (p.endsWith('/')) p = p.slice(0, -1);
-  return p;
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p || '/';
 }
 
-type Route = '/' | '/caja' | '/tragamonedas';
+function extractFromHash(hash: string): string {
+  let h = hash ?? '';
+  if (h.startsWith('#')) h = h.slice(1);
+  if (!h) return '';
+  return normalizePath(h);
+}
 
-function getRoute(): Route {
-  const np = normalizePath(window.location.pathname || '/');
-  if (np === '/caja') return '/caja';
-  if (np === '/tragamonedas') return '/tragamonedas';
+function resolveRoute(): Route {
+  // 1) Hash-mode primero: URL como /#/caja, /#/tragamonedas
+  const fromHash = extractFromHash(window.location.hash);
+  if (fromHash === '/caja') return '/caja';
+  if (fromHash === '/tragamonedas') return '/tragamonedas';
+
+  // 2) Si pathname no es "/", interpretarlo directamente
+  //    (sólo funciona si el hosting tiene rewrites SPA configurados)
+  const fromPath = normalizePath(window.location.pathname);
+  if (fromPath === '/caja') return '/caja';
+  if (fromPath === '/tragamonedas') return '/tragamonedas';
+
   return '/';
 }
 
 export default function App() {
-  const [route, setRoute] = useState<Route>(() => getRoute());
+  const [route, setRoute] = useState<Route>(() => resolveRoute());
 
   useEffect(() => {
-    const onChange = () => setRoute(getRoute());
-    window.addEventListener('popstate', onChange);
+    const onChange = () => setRoute(resolveRoute());
     window.addEventListener('hashchange', onChange);
+    window.addEventListener('popstate', onChange);
+
     const origPush = history.pushState;
     const origReplace = history.replaceState;
     history.pushState = function wrappedPush(...args) {
@@ -42,8 +57,8 @@ export default function App() {
       queueMicrotask(onChange);
     };
     return () => {
-      window.removeEventListener('popstate', onChange);
       window.removeEventListener('hashchange', onChange);
+      window.removeEventListener('popstate', onChange);
       history.pushState = origPush;
       history.replaceState = origReplace;
     };

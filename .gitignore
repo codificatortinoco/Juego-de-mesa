@@ -1,24 +1,156 @@
+# =============================================================
+# Dependencias y build
+# =============================================================
+node_modules/
+.pnp/
+.pnp.js
+.yarn/install-state.gz
+
+# Build output
+dist/
+dist-ssr/
+build/
+out/
+.vite/
+
+# Coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# =============================================================
 # Logs
-logs
+# =============================================================
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+bun-debug.log*
+bun-error.log*
+diagnostics/
 
-node_modules
-dist
-dist-ssr
-*.local
+# =============================================================
+# Sistema operativo
+# =============================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Thumbs.db:encryptable
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
-# Editor directories and files
+# =============================================================
+# Editores / IDE
+# =============================================================
+.idea/
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+!.vscode/settings.json
+.history/
+*.sw?
+*.swo
+*~
+
+# Visual Studio / Rider / MonoDevelop
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+.vs/
+
+# JetBrains (cualquier variante)
+.idea_modules/
+*.iml
+*.iws
+*.ipr
+out/
+
+# =============================================================
+# Variables de entorno y secrets
+# =============================================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+.secrets
+*.pem
+*.key
+*.crt
+*.p12
+
+# =============================================================
+# Caches varios
+# =============================================================
+.cache/
+.parcel-cache/
+.turbo/
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+.eslintcache
+.stylelintcache
+.tsbuildinfo
+*.tsbuildinfo
+node_repl_history
+.pidlock
+.lock-wscript
+
+# Vite / HMR específicos
+*.local
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# =============================================================
+# Archivos temporales / usuario
+# =============================================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.old
+*.orig
+*.patch
+
+# Directorios locales de documentación / trazas
+notes/
+TMP/
+
+# =============================================================
+# Carpeta assets de usuario NO subir? — comentado por defecto
+# (por ahora sí queremos trackear SVGs del juego en src/assets)
+# =============================================================
+# src/assets/Caja/
+# src/assets/Tablas/
+# src/assets/Tablas/
+# src/assets/Tragamonedas/
+
+# =============================================================
+# Archivos de publicación / despliegue (si usan)
+# =============================================================
+.vercel
+.netlify/
+.firebase/
+.serverless/
+.svelte-kit/
+.next/
+.nuxt/
+.output/
+.astro/
+
+# =============================================================
+# Navegadores web (service workers, PWA)
+# =============================================================
+sw.*
+workbox-*.js
