@@ -47,10 +47,24 @@ export function validateBoard(
   _pathResult: PathResult,
   _colorAssignments: Map<string, ColorAssignment>,
   usage: Record<TileCategory, number>,
-  opts: { relaxedFinalLength?: boolean } = {}
+  opts: {
+    relaxedFinalLength?: boolean;
+    desiredFinals?: number;
+    minFinalLength?: number;
+    minCajaMagica?: number;
+    maxCajaMagica?: number;
+    maxTragaMonedas?: number;
+  } = {}
 ): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const {
+    desiredFinals = 1,
+    minFinalLength = 25,
+    minCajaMagica,
+    maxCajaMagica,
+    maxTragaMonedas,
+  } = opts;
 
   const startTiles = Array.from(tiles.values()).filter((t) => t.category === 'inicio');
   const endTiles = Array.from(tiles.values()).filter((t) => t.category === 'final');
@@ -58,11 +72,124 @@ export function validateBoard(
   if (startTiles.length !== 1) {
     errors.push(`Debe haber exactamente 1 Inicio, hay ${startTiles.length}`);
   }
-  if (endTiles.length < 1) {
-    errors.push('Debe haber al menos 1 Final');
+  const minFinals = Math.max(1, (opts.desiredFinals != null ? opts.desiredFinals : 1) - 0);
+  const maxFinals = Math.min(4, desiredFinals + 1);
+  // Permitir rango [desiredFinals-1 .. desiredFinals+1] para estabilidad
+  const flexMinFinals = Math.max(1, minFinals - 1);
+  if (endTiles.length < flexMinFinals) {
+    errors.push(
+      `Faltan Finales: hay ${endTiles.length}, debe haber mínimo ${flexMinFinals} y máximo ${maxFinals} (objetivo ${desiredFinals}).`
+    );
   }
-  if (endTiles.length > 3) {
-    errors.push(`Máximo 3 Finales, hay ${endTiles.length}`);
+  if (endTiles.length > maxFinals) {
+    errors.push(
+      `Demasiados Finales: hay ${endTiles.length}, debe haber mínimo ${flexMinFinals} y máximo ${maxFinals} (objetivo ${desiredFinals}).`
+    );
+  }
+  if (endTiles.length > 4) {
+    errors.push(`Máximo 4 Finales, hay ${endTiles.length}`);
+  }
+
+  // --- [REGLA DURA ESPECIALES: Caja Mágica y Tragamonedas por dificultad] ---
+  const cajaMagicaTiles = Array.from(tiles.values()).filter((t) => t.category === 'cajaMagica');
+  const tragaMonedasTiles = Array.from(tiles.values()).filter((t) => t.category === 'tragaMonedas');
+  if (typeof minCajaMagica === 'number') {
+    if (cajaMagicaTiles.length < minCajaMagica) {
+      errors.push(
+        `Mínimo de Cajas Mágicas: ${minCajaMagica}, hay ${cajaMagicaTiles.length}. Deben aparecer siempre de 1 a 3.`
+      );
+    }
+  }
+  if (typeof maxCajaMagica === 'number') {
+    if (cajaMagicaTiles.length > maxCajaMagica) {
+      errors.push(
+        `Máximo de Cajas Mágicas: ${maxCajaMagica}, hay ${cajaMagicaTiles.length}.`
+      );
+    }
+  }
+  if (typeof maxTragaMonedas === 'number') {
+    if (tragaMonedasTiles.length > maxTragaMonedas) {
+      errors.push(
+        `Máximo de Tragamonedas: ${maxTragaMonedas}, hay ${tragaMonedasTiles.length}. En Tranquila son opcionales (de vez en cuando), nunca más de 1.`
+      );
+    }
+  }
+  // Comprobación cromática: Cajas/Tragamonedas (excepto categoría que sea neutral) deben respetar
+  // color === COLOR_CYCLE[pathStep % 4], igual que las reglas normales (patrón de colores).
+  for (const t of [...cajaMagicaTiles, ...tragaMonedasTiles]) {
+    if (t.color === 'neutral') continue;
+    const expectedIdx = Math.max(0, Math.floor(t.pathStep ?? 0)) % 4;
+    const expectedColor = COLOR_CYCLE[expectedIdx];
+    if (t.color !== expectedColor) {
+      errors.push(
+        `${t.category === 'cajaMagica' ? 'Caja Mágica' : 'Tragamonedas'} en (${t.x},${t.y}) step=${t.pathStep} viola patrón cromático: ${t.color} esperado ${expectedColor}.`
+      );
+    }
+  }
+
+  // --- [REGLA DURA 1 NUEVA MODERADA: TODOS los caminos terminan en Final] ---
+  // Cualquier loseta con 1 solo conector (hoja del grafo) que NO sea el Inicio, DEBE ser un Final.
+  // No se aceptan ramas cortadas / caminos muertos colgados sin Final (foto 1 usuario).
+  const hojasMuertas: PlacedTile[] = [];
+  for (const t of tiles.values()) {
+    if (t.connectors.length !== 1) continue;
+    if (t.category === 'inicio') continue;
+    if (t.category === 'final') continue;
+    hojasMuertas.push(t);
+  }
+  if (hojasMuertas.length > 0) {
+    const detalle = hojasMuertas
+      .map(t => `(${t.x},${t.y})[${t.category}-${t.color} shape=${t.shape}]`)
+      .join(', ');
+    errors.push(
+      `Ramas muertas SIN FINAL (${hojasMuertas.length}): ${detalle}. TODOS los caminos deben terminar en una casilla de Final, no pueden quedar colgados.`
+    );
+  }
+
+  // --- [REGLA DURA 2 NUEVA MODERADA: Grafo COMPLETAMENTE conexo desde Inicio] ---
+  if (startTiles.length === 1) {
+    const startK = coord(startTiles[0].x, startTiles[0].y);
+    const reach = new Set<string>([startK]);
+    const cola: string[] = [startK];
+    while (cola.length > 0) {
+      const k = cola.shift()!;
+      const t = tiles.get(k);
+      if (!t) continue;
+      for (const conn of t.connectors) {
+        let { dx, dy } = DIR_DELTA[conn];
+        if (t.shape === 'start' && conn === 'east') dx = 2;
+        const nx = t.x + dx;
+        const ny = t.y + dy;
+        const nk = coord(nx, ny);
+        let vecino = tiles.get(nk);
+        if (!vecino && conn === 'west' && t.shape !== 'start' && tiles.has(coord(nx - 1, ny))) {
+          const maybeStart = tiles.get(coord(nx - 1, ny));
+          if (maybeStart && maybeStart.shape === 'start' && maybeStart.connectors.includes('east')) {
+            vecino = maybeStart;
+          }
+        }
+        if (!vecino) continue;
+        const expectedBack = OPPOSITE_DIR[conn];
+        const reciproco =
+          (vecino.shape === 'start' && expectedBack === 'east') ||
+          vecino.connectors.includes(expectedBack);
+        if (!reciproco) continue;
+        const vk = coord(vecino.x, vecino.y);
+        if (!reach.has(vk)) {
+          reach.add(vk);
+          cola.push(vk);
+        }
+      }
+    }
+    const desconectadas: string[] = [];
+    for (const [k, t] of tiles.entries()) {
+      if (!reach.has(k)) desconectadas.push(`(${t.x},${t.y})[${t.category}-${t.color}]`);
+    }
+    if (desconectadas.length > 0) {
+      errors.push(
+        `Piezas DESCONECTADAS del Inicio (${desconectadas.length}): ${desconectadas.join(', ')}. No puede haber islas / trozos sueltos; todo el tablero debe llevar del Inicio al Final.`
+      );
+    }
   }
 
   for (const [_key, tile] of tiles) {
@@ -508,14 +635,14 @@ export function validateBoard(
     // --- [REGLA DURA 2 USUARIO: Intersección no permite llegar a Final antes de 25 espacios] ---
     // Para cada Final, su longitud desde Start (por el camino) debe ser >= 25 (o >=minBranchLength si tranquila=29).
     // Si opts.relaxedFinalLength → relajado a 12 (no se usa salvo debug).
-    const MIN_FINAL_LENGTH = opts.relaxedFinalLength ? 12 : 25;
+    const MIN_FINAL_LENGTH = opts.relaxedFinalLength ? 12 : minFinalLength;
     for (const et of endTileList) {
       const k = coord(et.x, et.y);
       const len = endLenMap.get(k);
       if (len == null) continue; // lo cogerá antes caminos muertos
       if (len < MIN_FINAL_LENGTH) {
         errors.push(
-          `Final en (${et.x},${et.y}) alcanzable en solo ${len} espacios desde Inicio. Mínimo permitido = ${MIN_FINAL_LENGTH} (no debe permitirse llegar al Final desde una intersección con rama corta).`
+          `Final en (${et.x},${et.y}) alcanzable en solo ${len} espacios desde Inicio. Mínimo permitido = ${MIN_FINAL_LENGTH} (no debe permitirse llegar al Final antes de ese número de casillas).`
         );
       }
     }

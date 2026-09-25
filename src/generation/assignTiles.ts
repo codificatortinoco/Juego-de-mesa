@@ -47,6 +47,11 @@ interface AssignOptions {
   only1StarPuntos?: boolean;
   puntosDensity?: number;
   allow4WayIntersection?: boolean;
+  minCajaMagica?: number;
+  maxCajaMagica?: number;
+  maxTragaMonedas?: number;
+  desiredFinals?: number;
+  minBranchLength?: number;
 }
 
 export const PORTAL_PAIRS: Record<string, string> = {
@@ -1161,10 +1166,33 @@ export function assignTilesToPath(
       lastPickedSpringSubtype = null;
     }
 
+    // REGLA DURA (cuotas hard sweep):
+    // Si la categoría elegida supera maxCajaMagica / maxTragaMonedas, bajar a normal.
+    // Evita que sweep coloque 4 tragamonedas cuando el máximo permitido es 1.
+    if (category === 'cajaMagica' && typeof options.maxCajaMagica === 'number') {
+      const currentC = usage.cajaMagica ?? 0;
+      if (currentC >= options.maxCajaMagica) {
+        category = allowedSet.has('normal') ? 'normal' : category;
+        if (category === 'normal') {
+          willBe2Estrellas = false;
+        }
+      }
+    }
+    if (category === 'tragaMonedas' && typeof options.maxTragaMonedas === 'number') {
+      const currentT = usage.tragaMonedas ?? 0;
+      if (currentT >= options.maxTragaMonedas) {
+        category = allowedSet.has('normal') ? 'normal' : category;
+        if (category === 'normal') {
+          willBe2Estrellas = false;
+        }
+      }
+    }
+
     // REGLA DURA:
     // - curve (cambio dirección) → SIEMPRE category='curve' (sin excepciones)
     // - intersection3/intersection4 → SOLO category='desvio'. NO fallback, NO degrade.
     //   (la loseta de intersección une 3/4 caminos y nada más).
+    // - cajaMagica / tragaMonedas → SOLO en STRAIGHT (SVGs rectos, prohibida curva por solapamiento visual).
     let finalShapeForCategory: TileShape;
     let skipCell = false;
     if (shape === 'curve') {
@@ -1198,6 +1226,16 @@ export function assignTilesToPath(
           errors.push(`Celda (${cell.x},${cell.y}) necesita DESVIO shape=${shape} pero sin presupuesto/inventario.`);
         }
       }
+    } else if (needsCurve && (category === 'cajaMagica' || category === 'tragaMonedas')) {
+      // Caso raro: lógica escogió cajaMagica/tragaMonedas pero clasificación interna es curve.
+      // Bajar a curve/normal para no romper la geometría visual.
+      category = allowedSet.has('curve') && remaining('curve') > 0 ? 'curve' : 'normal';
+      lastPickedSpringSubtype = null;
+      if (category === 'curve') {
+        const col = pickAvailableColorFor('curve', assignedColor, cell.pathStep, rng);
+        if (col) effectiveColor = col;
+      }
+      finalShapeForCategory = category === 'curve' ? 'curve' : 'straight';
     } else if (category === 'puntos' && willBe2Estrellas) {
       finalShapeForCategory = 'straight';
     } else {
@@ -1227,8 +1265,15 @@ export function assignTilesToPath(
       }
     }
     if (!tileMeta && !(shape === 'intersection3' || shape === 'intersection4')) {
-      // REGLA DURA IGUAL para categorías alternativas: NO cambiar curve↔straight
-      const altCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal'] as TileCategory[]).filter(c => allowedSet.has(c) && remaining(c) > 0);
+      // REGLA DURA IGUAL para categorías alternativas: NO cambiar curve↔straight.
+      // ADEMÁS: en cells CURVA, no usar cajaMagica/tragaMonedas (son SVGs rectos → solapamiento).
+      // ADEMÁS: respetar maxCajaMagica/maxTragaMonedas si están definidos.
+      const allAltCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal'] as TileCategory[]);
+      const altCats = allAltCats.filter(c => allowedSet.has(c) && remaining(c) > 0 &&
+        !(needsCurve && (c === 'cajaMagica' || c === 'tragaMonedas')) &&
+        !(c === 'cajaMagica' && typeof options.maxCajaMagica === 'number' && (usage.cajaMagica ?? 0) >= options.maxCajaMagica) &&
+        !(c === 'tragaMonedas' && typeof options.maxTragaMonedas === 'number' && (usage.tragaMonedas ?? 0) >= options.maxTragaMonedas)
+      );
       for (const ac of altCats) {
         const tryShapes: TileShape[] = needsCurve ? ['curve'] : ['straight'];
         for (const s of tryShapes) {
@@ -1813,6 +1858,842 @@ export function assignTilesToPath(
             }
           }
         }
+      }
+    }
+  }
+
+  // =============================================================
+  // POST-SWEEP CAJA MÁGICA & TRAGAMONEDAS (regla Tranquila)
+  // En dificultades que tengan minCajaMagica / maxCajaMagica / maxTragaMonedas:
+  // 1) Si el número de cajas está < minCajaMagica → reemplazar 1-3 celdas normal/curve
+  //    por cajaMagica, escogiendo steps que tengan color exacto del ciclo cromático.
+  // 2) Si el número de cajas > maxCajaMagica → degradar las sobrantes a normal/curve/puntos.
+  // 3) Si tragaMonedas > maxTragaMonedas → degradar sobrantes.
+  // =============================================================
+  {
+    const minC = allowedSet.has('cajaMagica')
+      ? (options.minCajaMagica ?? undefined)
+      : undefined;
+    const maxC = allowedSet.has('cajaMagica')
+      ? (options.maxCajaMagica ?? undefined)
+      : undefined;
+    const maxT = allowedSet.has('tragaMonedas')
+      ? (options.maxTragaMonedas ?? undefined)
+      : undefined;
+
+    const countBy = (cat: TileCategory) =>
+      Array.from(tiles.values()).filter(t => t.category === cat).length;
+
+    let cMagica = countBy('cajaMagica');
+    let tMonedas = countBy('tragaMonedas');
+
+    // Helper: intenta degradar una loseta target a una categoría simple (normal/curve).
+    // Prueba varias combinaciones shape/category/color hasta que una tenga stock y encaje.
+    function tryDegrade(target: PlacedTile): PlacedTile | null {
+      const step = target.pathStep ?? 0;
+      const req: Direction[] = Array.from(target.connectors);
+      const needsCurve = req.length === 2 &&
+        ((req.includes('north') || req.includes('south')) &&
+        (req.includes('east') || req.includes('west')) &&
+        !(req.includes('north') && req.includes('south')) &&
+        !(req.includes('east') && req.includes('west')));
+      const expectedColor = COLOR_CYCLE[Math.max(0, step) % 4] as ColorName;
+      const primaryShape: TileShape = needsCurve ? 'curve' : 'straight';
+      const altShape: TileShape = needsCurve ? 'straight' : 'curve';
+      const primaryCat: TileCategory = needsCurve ? 'curve' : 'normal';
+      const altCat: TileCategory = needsCurve ? 'normal' : 'curve';
+      const attempts: Array<{cat: TileCategory; shape: TileShape; color: ColorName | null}> = [
+        { cat: primaryCat, shape: primaryShape, color: expectedColor },
+        { cat: primaryCat, shape: primaryShape, color: null },
+        { cat: altCat, shape: altShape, color: expectedColor },
+        { cat: altCat, shape: altShape, color: null },
+      ];
+      for (const a of attempts) {
+        if (a.color && remainingColor(a.cat, a.color) <= 0) continue;
+        if (!a.color && remaining(a.cat) <= 0) continue;
+        const colorsToTry: ColorName[] = a.color
+          ? [a.color]
+          : (COLOR_KEYS as ColorName[]).filter(c => remainingColor(a.cat, c) > 0);
+        for (const col of colorsToTry) {
+          const r = createTileFromCategory(a.cat, col, a.shape, req, 0, false) as PlacedTile | null;
+          if (r) return r;
+        }
+      }
+      return null;
+    }
+
+    // Degradar sobrantes de caja
+    if (typeof maxC === 'number' && cMagica > maxC) {
+      const ordered = Array.from(tiles.values())
+        .filter(t => t.category === 'cajaMagica')
+        .sort((a, b) => (a.pathStep ?? 0) - (b.pathStep ?? 0));
+      for (let i = maxC; i < ordered.length; i++) {
+        const target = ordered[i];
+        const k = `${target.x},${target.y}`;
+        const replacement = tryDegrade(target);
+        if (replacement) {
+          const oldColor = target.color;
+          usage.cajaMagica = Math.max(0, usage.cajaMagica - 1);
+          if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+            colorUsage.cajaMagica[oldColor as ColorName] = Math.max(0, colorUsage.cajaMagica[oldColor as ColorName] - 1);
+          }
+          const next: PlacedTile = {
+            ...replacement,
+            x: target.x,
+            y: target.y,
+            pathStep: target.pathStep,
+            branchId: target.branchId,
+            parentStep: target.parentStep,
+          };
+          tiles.set(k, next);
+          usage[next.category] = (usage[next.category] ?? 0) + 1;
+          if (COLOR_KEYS.includes(next.color as ColorName)) {
+            colorUsage[next.category][next.color as ColorName] = (colorUsage[next.category][next.color as ColorName] ?? 0) + 1;
+          }
+          cMagica--;
+        }
+      }
+    }
+
+    // Forzar mínimos de caja (1 a 3)
+    if (typeof minC === 'number' && cMagica < minC) {
+      const isStraightCell = (req: Direction[]) => req.length === 2 &&
+        ((req.includes('west') && req.includes('east')) ||
+        (req.includes('north') && req.includes('south')));
+      // Candidatos PRIMARIOS: categoria normal/avanzar/retroceder/carcel/puntos/tragaMonedas
+      // STRAIGHT + color correcto. Incluimos tragaMonedas para doble efecto:
+      // degradar traga→caja reduce tMonedas (maxT) y aumenta cMagica (minC).
+      const candidates = Array.from(tiles.values()).filter(t => {
+        if (t.shape === 'start' || t.shape === 'end') return false;
+        if (t.shape === 'intersection3' || t.shape === 'intersection4') return false;
+        if (t.category === 'inicio' || t.category === 'final' || t.category === 'desvio') return false;
+        if (t.category === 'cajaMagica') return false;
+        if (t.color === 'neutral') return false;
+        const step = t.pathStep ?? 0;
+        const expectedColor = COLOR_CYCLE[Math.max(0, step) % 4] as ColorName;
+        if (t.color !== expectedColor) return false;
+        const req: Direction[] = Array.from(t.connectors);
+        if (!isStraightCell(req)) return false;
+        return true;
+      }).sort((a, b) => {
+        const aPriority = (a.category === 'tragaMonedas' ? 0 : 1);
+        const bPriority = (b.category === 'tragaMonedas' ? 0 : 1);
+        if (aPriority !== bPriority) return aPriority - bPriority;
+        const da = Math.abs((a.pathStep ?? 20) - 20);
+        const db = Math.abs((b.pathStep ?? 20) - 20);
+        return da - db;
+      });
+
+      for (const cand of candidates) {
+        if (cMagica >= minC) break;
+        if (countBy('cajaMagica') >= (typeof maxC === 'number' ? maxC : 999)) break;
+        if (remainingColor('cajaMagica', cand.color as ColorName) <= 0) continue;
+        const req: Direction[] = Array.from(cand.connectors);
+        const replacement: PlacedTile | null = createTileFromCategory(
+          'cajaMagica',
+          cand.color as ColorName,
+          'straight',
+          req,
+          0,
+          false
+        ) as PlacedTile | null;
+        if (!replacement) continue;
+        const k = `${cand.x},${cand.y}`;
+        const oldCat = cand.category;
+        const oldColor = cand.color;
+        usage[oldCat] = Math.max(0, usage[oldCat] - 1);
+        if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+          colorUsage[oldCat][oldColor as ColorName] = Math.max(0, colorUsage[oldCat][oldColor as ColorName] - 1);
+        }
+        const next: PlacedTile = {
+          ...replacement,
+          x: cand.x,
+          y: cand.y,
+          pathStep: cand.pathStep,
+          branchId: cand.branchId,
+          parentStep: cand.parentStep,
+        };
+        tiles.set(k, next);
+        usage.cajaMagica++;
+        if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+          colorUsage.cajaMagica[oldColor as ColorName]++;
+        }
+        if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+        cMagica++;
+        if (cMagica >= minC) break;
+      }
+
+      // Fallback sin color match estricto (STRAIGHT cells, candidatos más amplios
+      if (cMagica < minC) {
+        const candidates2 = Array.from(tiles.values()).filter(t => {
+          if (t.shape === 'start' || t.shape === 'end') return false;
+          if (t.shape === 'intersection3' || t.shape === 'intersection4') return false;
+          if (t.category === 'inicio' || t.category === 'final' || t.category === 'desvio') return false;
+          if (t.category === 'cajaMagica') return false;
+          const req: Direction[] = Array.from(t.connectors);
+          if (!isStraightCell(req)) return false;
+          return true;
+        }).sort((a, b) => {
+          const aPriority = (a.category === 'tragaMonedas' ? 0 : 1);
+          const bPriority = (b.category === 'tragaMonedas' ? 0 : 1);
+          return aPriority - bPriority;
+        });
+        for (const cand of candidates2) {
+          if (cMagica >= minC) break;
+          if (countBy('cajaMagica') >= (typeof maxC === 'number' ? maxC : 999)) break;
+          const col = cand.color === 'neutral'
+            ? (COLOR_CYCLE[Math.max(0, cand.pathStep ?? 0) % 4] as ColorName)
+            : (cand.color as ColorName);
+          if (remainingColor('cajaMagica', col) <= 0) continue;
+          const req: Direction[] = Array.from(cand.connectors);
+          const replacement: PlacedTile | null = createTileFromCategory(
+            'cajaMagica',
+            col,
+            'straight',
+            req,
+            0,
+            false
+          ) as PlacedTile | null;
+          if (!replacement) continue;
+          const k = `${cand.x},${cand.y}`;
+          const oldCat = cand.category;
+          const oldColor = cand.color;
+          usage[oldCat] = Math.max(0, usage[oldCat] - 1);
+          if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+            colorUsage[oldCat][oldColor as ColorName] = Math.max(0, colorUsage[oldCat][oldColor as ColorName] - 1);
+          }
+          const next: PlacedTile = {
+            ...replacement,
+            x: cand.x,
+            y: cand.y,
+            pathStep: cand.pathStep,
+            branchId: cand.branchId,
+            parentStep: cand.parentStep,
+          };
+          tiles.set(k, next);
+          usage.cajaMagica++;
+          if (COLOR_KEYS.includes(col)) colorUsage.cajaMagica[col]++;
+          if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+          cMagica++;
+        }
+      }
+
+      // Fallback EXTREMO: aún faltan cajas y no hay candidatos straight suficientes.
+      // Aceptamos reemplazar CUALQUIER loseta (incluso curve cells excepto inicio/final/desvio/caja).
+      // Si createTileFromCategory falla con connectors curve, forzamos connectors straight
+      // (menor de los males: cumplir sí o sí 1-3 cajas).
+      if (cMagica < minC) {
+        const lastCandidates = Array.from(tiles.values()).filter(t => {
+          if (t.category === 'inicio' || t.category === 'final' || t.category === 'desvio' || t.category === 'cajaMagica') return false;
+          return true;
+        }).sort((a, b) => {
+          const aPriority = (a.category === 'tragaMonedas' ? 0 : 1);
+          const bPriority = (b.category === 'tragaMonedas' ? 0 : 1);
+          if (aPriority !== bPriority) return aPriority - bPriority;
+          const da = Math.abs((a.pathStep ?? 15) - 15);
+          const db = Math.abs((b.pathStep ?? 15) - 15);
+          return da - db;
+        });
+        for (const cand of lastCandidates) {
+          if (cMagica >= minC) break;
+          if (countBy('cajaMagica') >= (typeof maxC === 'number' ? maxC : 999)) break;
+          const step = cand.pathStep ?? 0;
+          const expColor = COLOR_CYCLE[Math.max(0, step) % 4] as ColorName;
+          let col: ColorName = cand.color !== 'neutral' && COLOR_KEYS.includes(cand.color as ColorName)
+            ? cand.color as ColorName
+            : expColor;
+          if (remainingColor('cajaMagica', col) <= 0) {
+            const anyAvail = COLOR_KEYS.find(c => remainingColor('cajaMagica', c) > 0);
+            if (!anyAvail) continue;
+            col = anyAvail;
+          }
+          const reqOriginal: Direction[] = Array.from(cand.connectors);
+          let replacement: PlacedTile | null = createTileFromCategory(
+            'cajaMagica', col, 'straight', reqOriginal, 0, false
+          ) as PlacedTile | null;
+
+          if (!replacement) {
+            const reqStraight = reqOriginal.includes('west') || reqOriginal.includes('east')
+              ? (['west', 'east'] as Direction[])
+              : (['north', 'south'] as Direction[]);
+            replacement = createTileFromCategory(
+              'cajaMagica', col, 'straight', reqStraight, 0, false
+            ) as PlacedTile | null;
+          }
+          if (!replacement) continue;
+
+          const k = `${cand.x},${cand.y}`;
+          const oldCat = cand.category;
+          const oldColor = cand.color;
+          usage[oldCat] = Math.max(0, usage[oldCat] - 1);
+          if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+            colorUsage[oldCat][oldColor as ColorName] = Math.max(0, colorUsage[oldCat][oldColor as ColorName] - 1);
+          }
+          const next: PlacedTile = {
+            ...replacement,
+            x: cand.x,
+            y: cand.y,
+            pathStep: cand.pathStep,
+            branchId: cand.branchId,
+            parentStep: cand.parentStep,
+            connectors: (replacement.connectors && replacement.connectors.length) ? replacement.connectors : (cand.connectors.length ? cand.connectors : replacement.connectors),
+          };
+          tiles.set(k, next);
+          usage.cajaMagica++;
+          if (COLOR_KEYS.includes(col)) colorUsage.cajaMagica[col]++;
+          if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+          cMagica++;
+          if (cMagica >= minC) break;
+        }
+      }
+    }
+
+    // Degradar sobrantes de tragamonedas
+    if (typeof maxT === 'number' && tMonedas > maxT) {
+      const ordered = Array.from(tiles.values())
+        .filter(t => t.category === 'tragaMonedas')
+        .sort((a, b) => (a.pathStep ?? 0) - (b.pathStep ?? 0));
+      for (let i = maxT; i < ordered.length; i++) {
+        const target = ordered[i];
+        const k = `${target.x},${target.y}`;
+        const replacement = tryDegrade(target);
+        if (replacement) {
+          const oldColor = target.color;
+          usage.tragaMonedas = Math.max(0, usage.tragaMonedas - 1);
+          if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+            colorUsage.tragaMonedas[oldColor as ColorName] = Math.max(0, colorUsage.tragaMonedas[oldColor as ColorName] - 1);
+          }
+          const next: PlacedTile = {
+            ...replacement,
+            x: target.x,
+            y: target.y,
+            pathStep: target.pathStep,
+            branchId: target.branchId,
+            parentStep: target.parentStep,
+          };
+          tiles.set(k, next);
+          usage[next.category] = (usage[next.category] ?? 0) + 1;
+          if (COLOR_KEYS.includes(next.color as ColorName)) {
+            colorUsage[next.category][next.color as ColorName] = (colorUsage[next.category][next.color as ColorName] ?? 0) + 1;
+          }
+          tMonedas--;
+        }
+      }
+    }
+
+    // ================================================================
+    // POST-SWEEP NUEVO: MODERADA (y general) — CLEANUP CONEXIDAD + FINALS
+    // Regla usuario MODERADA fotos 1-2-3:
+    //   (1) SIN ISLAS DESCONECTADAS del Inicio (todo conectado)
+    //   (2) TODA hoja del grafo (1 conector) que no es Inicio → SÍ O SÍ Final
+    // Ejecutamos en un bucle hasta que no haya cambios (la cascada de borrar islas
+    // puede crear nuevas hojas, etc. y hay que re-pasar).
+    // ================================================================
+    const desiredFinalsCfg: number | undefined = options.desiredFinals;
+    const kCoord = (x: number, y: number) => `${x},${y}`;
+
+    // Helper: elimina un tile del mapa, desconectando todos sus vecinos de forma recíproca
+    // (quita el connector opuesto en cada vecino y rebuild shape/category con createTileFromCategory).
+    function removeTileAndDisconnect(k: string): void {
+      const t = tiles.get(k);
+      if (!t) return;
+      // 1. Actualizar/desconectar vecinos
+      for (const conn of Array.from(t.connectors)) {
+        let { dx, dy } = DIR_DELTA[conn];
+        if (t.shape === 'start' && conn === 'east') dx = 2;
+        const nx = t.x + dx;
+        const ny = t.y + dy;
+        const nk = kCoord(nx, ny);
+        let neighbor: PlacedTile | null = tiles.has(nk) ? tiles.get(nk)! : null;
+        if (!neighbor && conn === 'west') {
+          const maybeSK = kCoord(nx - 1, ny);
+          const maybeS = tiles.get(maybeSK);
+          if (maybeS && maybeS.shape === 'start' && maybeS.connectors.includes('east')) neighbor = maybeS;
+        }
+        if (!neighbor) continue;
+        if (neighbor.shape === 'start' || neighbor.shape === 'end' || neighbor.category === 'inicio' || neighbor.category === 'final') {
+          const expectedBack = OPPOSITE_DIR[conn];
+          const arr = Array.from(neighbor.connectors);
+          const idxR = arr.indexOf(expectedBack);
+          if (idxR >= 0) { arr.splice(idxR, 1); (neighbor as any).connectors = arr as any; }
+          continue;
+        }
+        const expectedBack = OPPOSITE_DIR[conn];
+        const arr: Direction[] = Array.from(neighbor.connectors);
+        const idxR = arr.indexOf(expectedBack);
+        if (idxR < 0) continue;
+        arr.splice(idxR, 1);
+        (neighbor as any).connectors = arr as any;
+        let newShape: TileShape | null = null;
+        let newCategory: TileCategory | null = null;
+        if (arr.length === 2) {
+          const [a, b] = arr;
+          if (OPPOSITE_DIR[a] === b) { newShape = 'straight'; newCategory = 'normal'; }
+          else { newShape = 'curve'; newCategory = 'curve'; }
+        } else if (arr.length === 3) { newShape = 'intersection3'; newCategory = 'desvio'; }
+        else if (arr.length >= 4) { newShape = 'intersection4'; newCategory = 'desvio'; }
+        if (newShape && newCategory) {
+          const isNeut = (neighbor.isNeutral || !COLOR_KEYS.includes(neighbor.color as ColorName));
+          const effColor: ColorName = (isNeut
+            ? COLOR_CYCLE[(neighbor.pathStep ?? 0) % 4]
+            : neighbor.color) as ColorName;
+          const rep: PlacedTile | null = createTileFromCategory(newCategory, effColor, newShape, arr, 0, false) as PlacedTile | null;
+          if (rep) {
+            const oldCat = neighbor.category;
+            const oldColor = neighbor.color;
+            usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
+            if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+              colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
+            }
+            if (oldCat === 'cajaMagica') cMagica = Math.max(0, cMagica - 1);
+            if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+            const merged: PlacedTile = {
+              ...rep,
+              x: neighbor.x,
+              y: neighbor.y,
+              pathStep: neighbor.pathStep,
+              branchId: neighbor.branchId,
+              parentStep: neighbor.parentStep,
+              connectors: arr,
+              rotation: (newShape === 'intersection3' || newShape === 'intersection4')
+                ? (neighbor.rotation ?? 0)
+                : (findRotationToMatch(
+                    newShape === 'straight' ? BASE_CONNECTORS.straight : newShape === 'curve' ? BASE_CONNECTORS.curve : rep.connectors,
+                    arr
+                  ) ?? 0),
+            };
+            tiles.set(nk, merged);
+            usage[newCategory] = (usage[newCategory] ?? 0) + 1;
+            if (COLOR_KEYS.includes(effColor)) {
+              const effC = effColor;
+              if (!colorUsage[newCategory]) (colorUsage as any)[newCategory] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+              colorUsage[newCategory][effC] = (colorUsage[newCategory][effC] ?? 0) + 1;
+            }
+          }
+        }
+      }
+      // 2. Actualizar usage counts del propio tile
+      usage[t.category] = Math.max(0, (usage[t.category] ?? 0) - 1);
+      if (t.color !== 'neutral' && COLOR_KEYS.includes(t.color as ColorName)) {
+        colorUsage[t.category][t.color as ColorName] = Math.max(0, (colorUsage[t.category][t.color as ColorName] ?? 0) - 1);
+      }
+      if (t.category === 'cajaMagica') cMagica = Math.max(0, cMagica - 1);
+      if (t.category === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+      tiles.delete(k);
+    }
+
+    const startTileOuter = Array.from(tiles.values()).find(t => t.category === 'inicio') || null;
+    const distanceFromStartOuter: Map<string, number> = new Map();
+    if (startTileOuter) {
+      const reach = new Set<string>();
+      const q: string[] = [kCoord(startTileOuter.x, startTileOuter.y)];
+      reach.add(kCoord(startTileOuter.x, startTileOuter.y));
+      distanceFromStartOuter.set(kCoord(startTileOuter.x, startTileOuter.y), 0);
+      while (q.length > 0) {
+        const key = q.shift()!;
+        const tile = tiles.get(key);
+        if (!tile) continue;
+        const currD = distanceFromStartOuter.get(key) ?? 0;
+        for (const conn of tile.connectors) {
+          let { dx, dy } = DIR_DELTA[conn];
+          if (tile.shape === 'start' && conn === 'east') dx = 2;
+          const nx = tile.x + dx;
+          const ny = tile.y + dy;
+          let nk = kCoord(nx, ny);
+          let neighbor = tiles.get(nk);
+          if (!neighbor && conn === 'west' && tile.shape !== 'start') {
+            const maybeSK = kCoord(nx - 1, ny);
+            const maybeS = tiles.get(maybeSK);
+            if (maybeS && maybeS.shape === 'start' && maybeS.connectors.includes('east')) {
+              neighbor = maybeS;
+              nk = maybeSK;
+            }
+          }
+          if (!neighbor) continue;
+          const expectedBack = OPPOSITE_DIR[conn];
+          const reciprocal = (neighbor.shape === 'start' && expectedBack === 'east') || neighbor.connectors.includes(expectedBack);
+          if (!reciprocal) continue;
+          const vk = kCoord(neighbor.x, neighbor.y);
+          if (!reach.has(vk)) {
+            reach.add(vk);
+            distanceFromStartOuter.set(vk, currD + 1);
+            q.push(vk);
+          }
+        }
+      }
+    }
+
+    // Helper: obtiene la distancia BFS más reciente desde Inicio.
+    // Si la distancia no está registrada para una clave, estima una cota usando startTileOuter.
+    function getDist(k: string): number {
+      if (distanceFromStartOuter.has(k)) return distanceFromStartOuter.get(k)!;
+      const t = tiles.get(k);
+      if (t && startTileOuter) {
+        // Usar pathStep como fallback aproximado (relativo al inicio real x+dx=2)
+        if (typeof t.pathStep === 'number') {
+          const startStepApprox = Math.max(2, Math.abs((startTileOuter.x + 2) - t.x) + Math.abs(startTileOuter.y - t.y));
+          return Math.max(t.pathStep, startStepApprox);
+        }
+        const dx = Math.abs((startTileOuter.x + 2) - t.x);
+        const dy = Math.abs(startTileOuter.y - t.y);
+        return dx + dy;
+      }
+      return 0;
+    }
+
+    let passSafety = 4;
+    while (passSafety-- > 0) {
+      const sizeBefore = tiles.size;
+      const finalsBefore = countBy('final');
+
+      // --- PASO 0.5: FINAL 0-conectores (huérfanos) ---
+      for (const [k, t] of Array.from(tiles.entries())) {
+        if (t.category === 'final' && t.connectors.length === 0) {
+          usage.final = Math.max(0, (usage.final ?? 0) - 1);
+          tiles.delete(k);
+        }
+      }
+
+      // --- PASO 1: BFS desde Inicio + BORRAR islas desconectadas ---
+      const startTile = Array.from(tiles.values()).find(t => t.category === 'inicio') || null;
+      if (startTile) {
+        const reachable = new Set<string>();
+        const queue: string[] = [kCoord(startTile.x, startTile.y)];
+        reachable.add(kCoord(startTile.x, startTile.y));
+        distanceFromStartOuter.set(kCoord(startTile.x, startTile.y), 0);
+        while (queue.length > 0) {
+          const key = queue.shift()!;
+          const tile = tiles.get(key);
+          if (!tile) continue;
+          const currD = distanceFromStartOuter.get(key) ?? 0;
+          for (const conn of tile.connectors) {
+            let { dx, dy } = DIR_DELTA[conn];
+            if (tile.shape === 'start' && conn === 'east') dx = 2;
+            const nx = tile.x + dx;
+            const ny = tile.y + dy;
+            let nk = kCoord(nx, ny);
+            let neighbor = tiles.get(nk);
+            if (!neighbor && conn === 'west' && tile.shape !== 'start') {
+              const maybeSK = kCoord(nx - 1, ny);
+              const maybeS = tiles.get(maybeSK);
+              if (maybeS && maybeS.shape === 'start' && maybeS.connectors.includes('east')) {
+                neighbor = maybeS;
+                nk = maybeSK;
+              }
+            }
+            if (!neighbor) continue;
+            const expectedBack = OPPOSITE_DIR[conn];
+            const reciprocal = (neighbor.shape === 'start' && expectedBack === 'east') || neighbor.connectors.includes(expectedBack);
+            if (!reciprocal) continue;
+            const vk = kCoord(neighbor.x, neighbor.y);
+            if (!reachable.has(vk)) {
+              reachable.add(vk);
+              distanceFromStartOuter.set(vk, currD + 1);
+              queue.push(vk);
+            }
+          }
+        }
+        const deletedKeys: string[] = [];
+        for (const k of tiles.keys()) {
+          if (!reachable.has(k)) {
+            const t = tiles.get(k);
+            if (t && t.category === 'inicio') continue;
+            deletedKeys.push(k);
+          }
+        }
+        for (const k of deletedKeys) removeTileAndDisconnect(k);
+      }
+
+      const minBL = typeof options.minBranchLength === 'number' ? options.minBranchLength : 0;
+
+      // --- PASO 2: Resolver hojas muertas en cascada ---
+      let cascadeSafety = 60;
+      while (cascadeSafety-- > 0) {
+        const finalsCount = countBy('final');
+        let actionTaken = false;
+        for (const [k, t] of Array.from(tiles.entries())) {
+          if (t.connectors.length !== 1) continue;
+          if (t.category === 'inicio' || t.category === 'final') continue;
+
+          const uniqueConn = t.connectors[0];
+          const catBudget = typeof desiredFinalsCfg === 'number' ? desiredFinalsCfg : 9999;
+          const dist = getDist(k);
+          const enoughDistance = dist >= minBL;
+          if (enoughDistance && finalsCount < catBudget && countBy('final') < Math.max(1, desiredFinalsCfg ?? 3)) {
+            const entranceDir = OPPOSITE_DIR[uniqueConn];
+            const endMeta: PlacedTile | null = createEndTile(entranceDir) as PlacedTile | null;
+            if (endMeta) {
+              const oldCat = t.category;
+              const oldColor = t.color;
+              usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
+              if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+                colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
+              }
+              if (oldCat === 'cajaMagica') cMagica = Math.max(0, cMagica - 1);
+              if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+              const nextT: PlacedTile = {
+                ...endMeta,
+                x: t.x,
+                y: t.y,
+                pathStep: t.pathStep,
+                branchId: t.branchId,
+                parentStep: t.parentStep,
+                connectors: [uniqueConn],
+                rotation: findRotationToMatch(BASE_CONNECTORS.end, [uniqueConn]) ?? 0,
+              };
+              tiles.set(k, nextT);
+              usage.final = (usage.final ?? 0) + 1;
+              actionTaken = true;
+              break;
+            }
+          }
+          removeTileAndDisconnect(k);
+          actionTaken = true;
+          break;
+        }
+        if (!actionTaken) break;
+      }
+
+      // --- PASO 3: Limpiar tiles con 0 conectores que no son start ---
+      const zeroConn: string[] = [];
+      for (const [k, t] of tiles.entries()) {
+        if (t.connectors.length === 0 && t.shape !== 'start') {
+          if (t.shape === 'end' || t.category === 'final') {
+            usage.final = Math.max(0, (usage.final ?? 0) - 1);
+          }
+          zeroConn.push(k);
+        }
+      }
+      for (const k of zeroConn) tiles.delete(k);
+
+      // --- PASO 4: ANTI-CICLOS (si no hay finals ni hojas) ---
+      let antiCycleSafety = 20;
+      while (antiCycleSafety-- > 0 && countBy('final') < 1) {
+        let broke: string | null = null;
+        for (const [k, t] of Array.from(tiles.entries())) {
+          if (t.shape === 'start' || t.shape === 'end' || t.category === 'inicio' || t.category === 'final') continue;
+          if (t.connectors.length === 2) {
+            const catBudget = typeof desiredFinalsCfg === 'number' ? desiredFinalsCfg : 3;
+            if (countBy('final') >= catBudget) break;
+            broke = k;
+            break;
+          }
+        }
+        if (!broke) break;
+        removeTileAndDisconnect(broke);
+        const zc2: string[] = [];
+        for (const [k, t] of tiles.entries()) {
+          if (t.connectors.length === 0 && t.shape !== 'start') {
+            if (t.shape === 'end' || t.category === 'final') usage.final = Math.max(0, (usage.final ?? 0) - 1);
+            zc2.push(k);
+          }
+        }
+        for (const k of zc2) tiles.delete(k);
+        let casSafety = 60;
+        while (casSafety-- > 0) {
+          const fCount = countBy('final');
+          let act = false;
+          for (const [k, t] of Array.from(tiles.entries())) {
+            if (t.connectors.length !== 1) continue;
+            if (t.category === 'inicio' || t.category === 'final') continue;
+            const uniqueConn = t.connectors[0];
+            const bgt = typeof desiredFinalsCfg === 'number' ? desiredFinalsCfg : 9999;
+            const dist = getDist(k);
+            if (dist >= minBL && fCount < bgt && countBy('final') < Math.max(1, desiredFinalsCfg ?? 3)) {
+              const entranceDir = OPPOSITE_DIR[uniqueConn];
+              const endMeta = createEndTile(entranceDir) as PlacedTile | null;
+              if (endMeta) {
+                const oldCat = t.category;
+                const oldColor = t.color;
+                usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
+                if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+                  colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
+                }
+                if (oldCat === 'cajaMagica') cMagica = Math.max(0, cMagica - 1);
+                if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+                const nextT: PlacedTile = {
+                  ...endMeta,
+                  x: t.x,
+                  y: t.y,
+                  pathStep: t.pathStep,
+                  branchId: t.branchId,
+                  parentStep: t.parentStep,
+                  connectors: [uniqueConn],
+                  rotation: findRotationToMatch(BASE_CONNECTORS.end, [uniqueConn]) ?? 0,
+                };
+                tiles.set(k, nextT);
+                usage.final = (usage.final ?? 0) + 1;
+                act = true;
+                break;
+              }
+            }
+            removeTileAndDisconnect(k);
+            act = true;
+            break;
+          }
+          if (!act) break;
+        }
+      }
+
+      // --- PROTECCIÓN path.endCoords: reestablecer finales del path si cleanup los rompió ---
+      // Después de cascade/removes, los finales originales del path pudieron haberse quedado
+      // con 0 connectors o haber sido borrados. Los reestablecemos "a pelo" como createEndTile.
+      {
+        const pCkey = (x: number, y: number) => `${x},${y}`;
+        for (const ec of endCoords) {
+          const pK = pCkey(ec.x, ec.y);
+          const pCell = grid.get(pK);
+          if (!pCell) continue;
+          const pIncoming: Direction = (pCell.incoming ?? 'west') as Direction;
+          // Recrear un final limpio en esta celda
+          const pFinal: PlacedTile = {
+            ...createEndTile(pIncoming),
+            x: ec.x,
+            y: ec.y,
+            pathStep: pCell.pathStep,
+            branchId: pCell.branchId,
+            parentStep: pCell.parentStep,
+            connectors: [pIncoming],
+            rotation: findRotationToMatch(BASE_CONNECTORS.end, [pIncoming]) ?? 0,
+          };
+          const pPrev = tiles.get(pK);
+          if (!pPrev || pPrev.category !== 'final') {
+            if (pPrev) {
+              usage[pPrev.category] = Math.max(0, usage[pPrev.category] - 1);
+              colorUsage[pPrev.category];
+            }
+            usage.final = (usage.final ?? 0) + 1;
+          }
+          tiles.set(pK, pFinal);
+          // Asegurar que el VECINO que apunta a este final tiene el conector recíproco
+          // (O puede haber sido roto por el removeTileAndDisconnect). Si no lo tiene, se lo añadimos.
+          const neighDx = DIR_DELTA[pIncoming].dx;
+          const neighDy = DIR_DELTA[pIncoming].dy;
+          const nNK = pCkey(ec.x + neighDx, ec.y + neighDy);
+          const pNeighbor = tiles.get(nNK);
+          if (pNeighbor) {
+            const expectedBack = OPPOSITE_DIR[pIncoming];
+            if (!pNeighbor.connectors.includes(expectedBack)) {
+              const nb: Direction[] = [...pNeighbor.connectors, expectedBack];
+              const oldCat = pNeighbor.category;
+              const oldColor = pNeighbor.color;
+              usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
+              if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+                colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
+              }
+              const needsCurve =
+                nb.length === 2 &&
+                (nb.includes('north') || nb.includes('south')) &&
+                (nb.includes('east') || nb.includes('west')) &&
+                !(nb.includes('north') && nb.includes('south')) &&
+                !(nb.includes('east') && nb.includes('west'));
+              const newShape: TileShape =
+                nb.length === 3 ? 'intersection3' :
+                nb.length === 4 ? 'intersection4' :
+                needsCurve ? 'curve' : 'straight';
+              const newCat: TileCategory = newShape === 'intersection3' || newShape === 'intersection4' ? 'desvio' : needsCurve ? 'curve' : 'normal';
+              // Colores: ciclo
+              const pStep = typeof pNeighbor.pathStep === 'number' ? pNeighbor.pathStep : 0;
+              const pColor: TileColor = COLOR_CYCLE[pStep % 4];
+              const replacement = createTileFromCategory(newCat, pColor, newShape, nb, pNeighbor.rotation ?? 0, false) as PlacedTile | null;
+              if (replacement) {
+                const tNext: PlacedTile = {
+                  ...replacement,
+                  x: pNeighbor.x,
+                  y: pNeighbor.y,
+                  pathStep: pNeighbor.pathStep,
+                  branchId: pNeighbor.branchId,
+                  parentStep: pNeighbor.parentStep,
+                };
+                tiles.set(nNK, tNext);
+                usage[tNext.category] = (usage[tNext.category] ?? 0) + 1;
+                if (tNext.color !== 'neutral' && COLOR_KEYS.includes(tNext.color as ColorName)) {
+                  colorUsage[tNext.category][tNext.color as ColorName] = (colorUsage[tNext.category][tNext.color as ColorName] ?? 0) + 1;
+                }
+              } else {
+                // Fallback: meter conector sin cambiar shape
+                (pNeighbor as any).connectors = nb;
+              }
+            }
+          }
+        }
+      }
+
+      const sizeAfter = tiles.size;
+      const finalsAfter = countBy('final');
+      if (sizeAfter === sizeBefore && finalsAfter === finalsBefore) break;
+    }
+
+    // --- PASO FINAL: TOP-UP finales si faltan (fuerza desiredFinals) ---
+    // Si tras toda la limpieza hay menos finales de los deseados, rompemos tiles 2conectores
+    // (straight/curve) situados a una distancia sana desde Inicio para crear hojas y nuevos finales.
+    const topupBudget = typeof desiredFinalsCfg === 'number' ? desiredFinalsCfg : 9999;
+    const topupMinBL = typeof options.minBranchLength === 'number' ? options.minBranchLength : 0;
+    let topupSafety = 10;
+    while (topupSafety-- > 0 && countBy('final') < topupBudget && (usage.final ?? 0) < (TILE_INVENTORY.final.total ?? 4)) {
+      let victim: string | null = null;
+      let bestD = -1;
+      for (const [k, t] of Array.from(tiles.entries())) {
+        if (t.shape === 'start' || t.shape === 'end' || t.category === 'inicio' || t.category === 'final') continue;
+        if (t.connectors.length !== 2) continue;
+        if (t.category === 'carcel' || t.category === 'cajaMagica' || t.category === 'tragaMonedas') continue;
+        if (t.category === 'puntos' || t.category === 'avanzar' || t.category === 'retroceder') continue;
+        const d = getDist(k);
+        if (d < topupMinBL + 2) continue;
+        if (d > bestD) { bestD = d; victim = k; }
+      }
+      if (!victim) break;
+      removeTileAndDisconnect(victim);
+      const zcTop: string[] = [];
+      for (const [k, t] of tiles.entries()) {
+        if (t.connectors.length === 0 && t.shape !== 'start') {
+          if (t.shape === 'end' || t.category === 'final') usage.final = Math.max(0, (usage.final ?? 0) - 1);
+          zcTop.push(k);
+        }
+      }
+      for (const k of zcTop) tiles.delete(k);
+      let casTop = 60;
+      while (casTop-- > 0) {
+        const fCt = countBy('final');
+        let act2 = false;
+        for (const [k, t] of Array.from(tiles.entries())) {
+          if (t.connectors.length !== 1) continue;
+          if (t.category === 'inicio' || t.category === 'final') continue;
+          const uniqueConn = t.connectors[0];
+          const dist = getDist(k);
+          if (dist >= topupMinBL && fCt < topupBudget && countBy('final') < Math.max(1, desiredFinalsCfg ?? 3) && (usage.final ?? 0) < (TILE_INVENTORY.final.total ?? 4)) {
+            const entranceDir = OPPOSITE_DIR[uniqueConn];
+            const endMeta = createEndTile(entranceDir) as PlacedTile | null;
+            if (endMeta) {
+              const oldCat = t.category;
+              const oldColor = t.color;
+              usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
+              if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+                colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
+              }
+              if (oldCat === 'cajaMagica') cMagica = Math.max(0, cMagica - 1);
+              if (oldCat === 'tragaMonedas') tMonedas = Math.max(0, tMonedas - 1);
+              const nextT: PlacedTile = {
+                ...endMeta,
+                x: t.x,
+                y: t.y,
+                pathStep: t.pathStep,
+                branchId: t.branchId,
+                parentStep: t.parentStep,
+                connectors: [uniqueConn],
+                rotation: findRotationToMatch(BASE_CONNECTORS.end, [uniqueConn]) ?? 0,
+              };
+              tiles.set(k, nextT);
+              usage.final = (usage.final ?? 0) + 1;
+              act2 = true;
+              break;
+            }
+          }
+          removeTileAndDisconnect(k);
+          act2 = true;
+          break;
+        }
+        if (!act2) break;
       }
     }
   }

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CardModal } from '../components/CardModal';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CardModal } from "../components/CardModal";
 
-const TRAGAMONEDAS_IMAGES = import.meta.glob('/src/assets/Tragamonedas/*.svg', {
+const TRAGAMONEDAS_IMAGES = import.meta.glob("/src/assets/Tragamonedas/*.svg", {
   eager: true,
-  query: '?url',
-  import: 'default',
+  query: "?url",
+  import: "default",
 }) as Record<string, string>;
 
 function pickRandom<T>(arr: T[]): T {
@@ -30,28 +30,19 @@ export function TragamonedasPage() {
     <div className="card-page tragamonedas-page">
       <header className="card-page-header">
         <h1 className="card-page-title">🎰 Tragamonedas</h1>
-        <p className="card-page-subtitle">
-          Saca una carta aleatoria durante la partida
-        </p>
       </header>
 
       <main className="card-page-main">
-        <button
-          type="button"
-          className="card-page-draw-btn"
-          onClick={drawCard}
-        >
+        <button type="button" className="card-page-draw-btn" onClick={drawCard}>
           🎴 SACAR CARTA
         </button>
 
-        <p className="card-page-meta">
-          {cards.length} cartas disponibles
-        </p>
+        <p className="card-page-meta">{cards.length} cartas disponibles</p>
       </main>
 
       <CardModal
         open={open}
-        imageSrc={current ?? ''}
+        imageSrc={current ?? ""}
         imageAlt="Carta de Tragamonedas"
         onClose={() => setOpen(false)}
         onAnotherCard={drawCard}

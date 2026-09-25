@@ -1,3 +1,23 @@
+:root {
+  --c-rosa: #ff6fae;
+  --c-amarillo: #ffde3a;
+  --c-azul: #2f6bff;
+  --c-rojo: #ff3b30;
+  --c-negro: #0e0e14;
+  --c-blanco: #ffffff;
+  --c-fondo: #f4f1ff;
+
+  --font-display: 'Righteous', 'Nunito Sans', system-ui, sans-serif;
+  --font-body: 'Nunito Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+
+  --shadow-memes: 6px 6px 0 0 var(--c-negro);
+  --shadow-memes-sm: 3px 3px 0 0 var(--c-negro);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -6,5 +26,57 @@ html, body {
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f4f7fc;
+  font-family: var(--font-body);
+  color: var(--c-negro);
+  background:
+    radial-gradient(circle at 10% 10%, rgba(255, 111, 174, 0.35), transparent 26%),
+    radial-gradient(circle at 90% 0%, rgba(255, 222, 58, 0.45), transparent 28%),
+    radial-gradient(circle at 85% 90%, rgba(47, 107, 255, 0.35), transparent 32%),
+    radial-gradient(circle at 0% 95%, rgba(255, 59, 48, 0.28), transparent 30%),
+    var(--c-fondo);
+  background-attachment: fixed;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.85;
+}
+
+body::before {
+  width: 220px;
+  height: 220px;
+  left: -60px;
+  top: 80px;
+  border-radius: 999px;
+  background: var(--c-rosa);
+  box-shadow: var(--shadow-memes-sm);
+  transform: rotate(-8deg);
+}
+
+body::after {
+  width: 180px;
+  height: 180px;
+  right: -40px;
+  top: 200px;
+  background: var(--c-amarillo);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  transform: rotate(18deg);
+  box-shadow: var(--shadow-memes-sm);
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+p, span, label, button, input, select, textarea {
+  font-family: var(--font-body);
 }

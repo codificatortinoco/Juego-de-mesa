@@ -61,6 +61,9 @@ export interface DifficultyConfig {
   only1StarPuntos: boolean;
   puntosDensity: number;
   allow4WayIntersection: boolean;
+  minCajaMagica?: number;
+  maxCajaMagica?: number;
+  maxTragaMonedas?: number;
 }
 
 export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
@@ -68,29 +71,32 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     key: 'tranquila',
     gridWidth: 14,
     gridHeight: 14,
-    minTiles: 31,
-    maxTiles: 31,
-    minBranchLength: 29,
+    minTiles: 24,
+    maxTiles: 48,
+    minBranchLength: 25,
     desiredFinals: 1,
     desvioBudget: 0,
     intersectionProbability: 0,
     turnProbability: 0.35,
-    allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder'],
+    allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'cajaMagica', 'tragaMonedas'],
     only1StarPuntos: true,
     puntosDensity: 0.14,
     allow4WayIntersection: false,
+    minCajaMagica: 1,
+    maxCajaMagica: 3,
+    maxTragaMonedas: 1,
   },
   moderada: {
     key: 'moderada',
-    gridWidth: 14,
-    gridHeight: 14,
-    minTiles: 25,
-    maxTiles: 52,
-    minBranchLength: 20,
-    desiredFinals: 2,
+    gridWidth: 15,
+    gridHeight: 15,
+    minTiles: 30,
+    maxTiles: 60,
+    minBranchLength: 25,
+    desiredFinals: 3,
     desvioBudget: 3,
-    intersectionProbability: 0.25,
-    turnProbability: 0.3,
+    intersectionProbability: 0.27,
+    turnProbability: 0.32,
     allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'desvio', 'carcel', 'cajaMagica', 'tragaMonedas'],
     only1StarPuntos: false,
     puntosDensity: 0.12,
@@ -139,7 +145,8 @@ function tryOnce(
     allow4WayIntersection: cfg.allow4WayIntersection,
   });
 
-  if (path.endCoords.length !== cfg.desiredFinals) return null;
+  if (path.endCoords.length < Math.max(1, cfg.desiredFinals - 1)) return null;
+  if (path.endCoords.length > cfg.desiredFinals + 1) return null;
   if (path.grid.size < cfg.minTiles) return null;
   if (path.grid.size > cfg.maxTiles) return null;
 
@@ -152,12 +159,18 @@ function tryOnce(
     only1StarPuntos: cfg.only1StarPuntos,
     puntosDensity: cfg.puntosDensity,
     allow4WayIntersection: cfg.allow4WayIntersection,
+    minCajaMagica: cfg.minCajaMagica,
+    maxCajaMagica: cfg.maxCajaMagica,
+    maxTragaMonedas: cfg.maxTragaMonedas,
+    desiredFinals: cfg.desiredFinals,
+    minBranchLength: cfg.minBranchLength,
   });
   return { path, colors, tileAssign };
 }
 
 export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty = 'tranquila'): BoardResult {
   const seed: Seed = inputSeed != null ? parseSeed(inputSeed) : generateRandomSeed();
+  const cfg = DIFFICULTY_CONFIGS[difficulty];
 
   let relaxed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -178,7 +191,14 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       tileAssign.tiles,
       path,
       colors,
-      tileAssign.usage
+      tileAssign.usage,
+      {
+        desiredFinals: cfg.desiredFinals,
+        minFinalLength: cfg.minBranchLength,
+        minCajaMagica: cfg.minCajaMagica,
+        maxCajaMagica: cfg.maxCajaMagica,
+        maxTragaMonedas: cfg.maxTragaMonedas,
+      }
     );
 
     const allErrors = [
@@ -213,7 +233,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     if (attempt === MAX_ATTEMPTS - 1 && !relaxed) {
       console.warn(
         `[generateBoard] Intentos ${attempt + 1} sin relajar. Errores últimos 3:`,
-        allErrors.slice(0, 6)
+        allErrors.slice(0, 10)
       );
     }
   }
@@ -234,7 +254,14 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       path,
       colors,
       tileAssign.usage,
-      { relaxedFinalLength: true }
+      {
+        relaxedFinalLength: true,
+        desiredFinals: cfg.desiredFinals,
+        minFinalLength: cfg.minBranchLength,
+        minCajaMagica: cfg.minCajaMagica,
+        maxCajaMagica: cfg.maxCajaMagica,
+        maxTragaMonedas: cfg.maxTragaMonedas,
+      }
     );
 
     const hardErrors = [
@@ -279,10 +306,131 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     }
   }
 
-  const cfg = DIFFICULTY_CONFIGS[difficulty];
-  const rng = createSeededRandom(seed);
-  const fallback = generatePathStructure({
-    rng,
+  // --- FALLBACK FINAL CON HARD CHECKS ---
+  // Cuando se acaban los 200 intentos (100 strict + 100 relaxed), NO DEVOLVEMOS
+  // un mapa cualquiera (anterior bug: caía aquí y devolvía mapas con 0 finales, hojas muertas,
+  // islas y trayectos sin finalizar). Ahora iteramos 100 intentos extra y exigimos HARD CHECKS:
+  //   1. Start tiene exactamente 1 conector
+  //   2. 0 hojas muertas (1-conector que no sea start ni final)
+  //   3. Finals count ∈ [desiredFinals-1 .. desiredFinals+1]
+  //   4. 0 islas DESCONECTADAS
+  // Si aún así no encuentra, devolvemos el "mejor" candidato (menos hard errors).
+  function extractHardErrors(
+    validation: ValidationResult,
+    tilesMap: Map<string, PlacedTile>
+  ): string[] {
+    const hard: string[] = [];
+    for (const e of validation.errors) {
+      if (
+        e.includes('Ramas muertas SIN FINAL') ||
+        e.includes('Piezas DESCONECTADAS del Inicio') ||
+        e.includes('Camino muerto en') ||
+        e.includes('Hay piezas desconectadas') ||
+        e.includes('No existe camino válido desde Inicio a ningún Final') ||
+        e.includes('start en') ||
+        e.startsWith('Debe haber exactamente 1 Inicio') ||
+        e.startsWith('Faltan Finales:') ||
+        e.startsWith('Demasiados Finales:') ||
+        e.startsWith('Máximo 4 Finales') ||
+        e.includes('Final en (') ||
+        e.includes('Conexión abierta inválida') ||
+        e.includes('Conexión no recíproca')
+      ) {
+        hard.push(e);
+      }
+    }
+    // Extra hard check directo sobre el tilesMap por si acaso
+    const startTile = Array.from(tilesMap.values()).find(t => t.category === 'inicio');
+    if (startTile && startTile.connectors.length !== 1) {
+      hard.push(`start direct-check connectors=${startTile.connectors.length}`);
+    }
+    const hojasMuertas = Array.from(tilesMap.values()).filter(t =>
+      t.connectors.length === 1 && t.category !== 'inicio' && t.category !== 'final'
+    ).length;
+    if (hojasMuertas > 0) hard.push(`hojas muertas direct-check = ${hojasMuertas}`);
+    return hard;
+  }
+
+  type Candidate = {
+    tiles: Map<string, PlacedTile>;
+    pathResult: PathResult;
+    colorAssignments: Map<string, ColorAssignment>;
+    usage: Record<TileCategory, number>;
+    validation: ValidationResult;
+    hardCount: number;
+    attemptsOffset: number;
+    relaxedSeparation: boolean;
+  };
+  const candidates: Candidate[] = [];
+  const EXTRA_FALLBACK_ATTEMPTS = 100;
+  for (let attempt = 0; attempt < EXTRA_FALLBACK_ATTEMPTS; attempt++) {
+    const rng = createSeededRandom(seed + 777777 + attempt * 53);
+    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty);
+    if (!tryIt) continue;
+    const { path, colors, tileAssign } = tryIt;
+    const val = validateBoard(tileAssign.tiles, path, colors, tileAssign.usage, {
+      relaxedFinalLength: true,
+      desiredFinals: cfg.desiredFinals,
+      minFinalLength: cfg.minBranchLength,
+      minCajaMagica: cfg.minCajaMagica,
+      maxCajaMagica: cfg.maxCajaMagica,
+      maxTragaMonedas: cfg.maxTragaMonedas,
+    });
+    const hard = extractHardErrors(val, tileAssign.tiles);
+    const cand: Candidate = {
+      tiles: tileAssign.tiles,
+      pathResult: path,
+      colorAssignments: colors,
+      usage: tileAssign.usage,
+      validation: val,
+      hardCount: hard.length,
+      attemptsOffset: attempt,
+      relaxedSeparation: true,
+    };
+    if (hard.length === 0) {
+      console.log(`[generateBoard] Fallback exitoso en intento ${attempt}: PASÓ hard checks.`);
+      return {
+        tiles: cand.tiles,
+        pathResult: cand.pathResult,
+        colorAssignments: cand.colorAssignments,
+        usage: cand.usage,
+        validation: cand.validation,
+        seed,
+        attempts: MAX_ATTEMPTS * 2 + 1 + attempt,
+        width: cand.pathResult.width,
+        height: cand.pathResult.height,
+        relaxedSeparation: true,
+      };
+    }
+    candidates.push(cand);
+  }
+
+  // Si ningún candidato pasó hard checks, devolvemos el MEJOR (menos hardCount)
+  // Pero todavía intentamos no devolver mapas MUY rotos: si todos tienen >12 errores,
+  // al menos es el mejor de ellos, para que la UI nunca se quede sin mapa.
+  candidates.sort((a, b) => a.hardCount - b.hardCount);
+  const best = candidates[0];
+  if (best) {
+    console.error(`[generateBoard] Todos los intentos fallaron (${MAX_ATTEMPTS * 2 + EXTRA_FALLBACK_ATTEMPTS}). Mejor candidato tiene ${best.hardCount} errores hard.`);
+    return {
+      tiles: best.tiles,
+      pathResult: best.pathResult,
+      colorAssignments: best.colorAssignments,
+      usage: best.usage,
+      validation: best.validation,
+      seed,
+      attempts: MAX_ATTEMPTS * 2 + 1 + EXTRA_FALLBACK_ATTEMPTS,
+      width: best.pathResult.width,
+      height: best.pathResult.height,
+      relaxedSeparation: true,
+    };
+  }
+
+  // Último último fallback si ni siquiera tryOnce devolvió algo
+  // (debería ser imposible porque generatePath siempre genera algo)
+  const lastRng = createSeededRandom(seed);
+  const lastFb = generatePathStructure({
+    rng: lastRng,
     gridWidth: cfg.gridWidth,
     gridHeight: cfg.gridHeight,
     maxTiles: cfg.maxTiles,
@@ -293,25 +441,38 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     minBranchLength: cfg.minBranchLength,
     allow4WayIntersection: cfg.allow4WayIntersection,
   });
-  const colors = assignColorsToPath(fallback, rng.range(0, 3));
-  const tiles = assignTilesToPath(fallback, colors, rng, {
+  const lastColors = assignColorsToPath(lastFb, lastRng.range(0, 3));
+  const lastTiles = assignTilesToPath(lastFb, lastColors, lastRng, {
     relaxSeparation: true,
     allowedCategories: cfg.allowedCategories,
     only1StarPuntos: cfg.only1StarPuntos,
     puntosDensity: cfg.puntosDensity,
     allow4WayIntersection: cfg.allow4WayIntersection,
+    minCajaMagica: cfg.minCajaMagica,
+    maxCajaMagica: cfg.maxCajaMagica,
+    maxTragaMonedas: cfg.maxTragaMonedas,
+    desiredFinals: cfg.desiredFinals,
+    minBranchLength: cfg.minBranchLength,
   });
-  const validation = validateBoard(tiles.tiles, fallback, colors, tiles.usage, { relaxedFinalLength: true });
+  const lastVal = validateBoard(lastTiles.tiles, lastFb, lastColors, lastTiles.usage, {
+    relaxedFinalLength: true,
+    desiredFinals: cfg.desiredFinals,
+    minFinalLength: cfg.minBranchLength,
+    minCajaMagica: cfg.minCajaMagica,
+    maxCajaMagica: cfg.maxCajaMagica,
+    maxTragaMonedas: cfg.maxTragaMonedas,
+  });
+  console.error('[generateBoard] Último fallback (sin candidatos).');
   return {
-    tiles: tiles.tiles,
-    pathResult: fallback,
-    colorAssignments: colors,
-    usage: tiles.usage,
-    validation,
+    tiles: lastTiles.tiles,
+    pathResult: lastFb,
+    colorAssignments: lastColors,
+    usage: lastTiles.usage,
+    validation: lastVal,
     seed,
-    attempts: MAX_ATTEMPTS * 2 + 1,
-    width: fallback.width,
-    height: fallback.height,
+    attempts: MAX_ATTEMPTS * 2 + 1 + EXTRA_FALLBACK_ATTEMPTS + 1,
+    width: lastFb.width,
+    height: lastFb.height,
     relaxedSeparation: true,
   };
 }

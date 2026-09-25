@@ -43,7 +43,7 @@ export const TILE_INVENTORY = {
   cajaMagica: { perColor: { rojo: 1, rosado: 1, amarillo: 1, azul: 1 } } as CategoryInventory,
   tragaMonedas: { perColor: { rojo: 1, rosado: 1, amarillo: 1, azul: 1 } } as CategoryInventory,
   inicio: { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 2 } as CategoryInventory & { total: number },
-  final:  { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 2 } as CategoryInventory & { total: number },
+  final:  { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 4 } as CategoryInventory & { total: number },
 };
 
 export type TileCategory = keyof typeof TILE_INVENTORY;

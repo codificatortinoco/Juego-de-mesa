@@ -42,7 +42,40 @@ export default function App() {
   const [route, setRoute] = useState<Route>(() => resolveRoute());
 
   useEffect(() => {
-    const onChange = () => setRoute(resolveRoute());
+    // CASO ESPECIAL: Si el usuario entra "en limpio" (URL vacía, ni hash /caja
+    // ni /tragamonedas, ni pathname /caja ni /tragamonedas) — redirigir al
+    // generador de mapas por defecto (#/). Específicamente: si hay un hash
+    // "raro" tipo /#/, /#, vacío, o sólo el pathname /, forzamos la ruta al
+    // tablero para que nunca muestre caja/tragamonedas al entrar a la raíz.
+    const enforceDefault = () => {
+      const hashRaw = window.location.hash ?? '';
+      const pathRaw = window.location.pathname ?? '/';
+      const pathNorm = normalizePath(pathRaw);
+      const hashNorm = extractFromHash(hashRaw);
+      const hashOrPathIsCard =
+        pathNorm === '/caja' || pathNorm === '/tragamonedas' ||
+        hashNorm === '/caja' || hashNorm === '/tragamonedas';
+      // Si NO es una ruta de cartas explícita, forzamos a la ruta del tablero
+      // (generador de mapas) limpiando el hash sobrante.
+      if (!hashOrPathIsCard) {
+        const normalizedHash = ''; // Vacío = tablero.
+        const newHref =
+          window.location.pathname.replace(/\/[^/]*$/, '/') +
+          (window.location.search || '') +
+          (normalizedHash ? `#${normalizedHash}` : '');
+        const cur = window.location.pathname + (window.location.search || '') + (window.location.hash || '');
+        const target = window.location.pathname === '/' && hashNorm === '' ? cur : newHref;
+        if (target !== cur) {
+          history.replaceState(null, '', window.location.pathname + (window.location.search || ''));
+        }
+      }
+    };
+    enforceDefault();
+
+    const onChange = () => {
+      enforceDefault();
+      setRoute(resolveRoute());
+    };
     window.addEventListener('hashchange', onChange);
     window.addEventListener('popstate', onChange);
 

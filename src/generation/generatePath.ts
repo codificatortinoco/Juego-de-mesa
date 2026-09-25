@@ -634,6 +634,14 @@ export function generatePathStructure(
       if ((Math.abs(cell.x - startX) + Math.abs(cell.y - startY)) <= 2) protectedByStart = true;
       if ((Math.abs(cell.x - (startX + 1)) + Math.abs(cell.y - startY)) <= 2) protectedByStart = true;
       if (protectedByStart || protectedByEnd) continue;
+
+      // REGLA DURA ANTI-CASCADA: Si la celda ya tiene asignado incoming y al menos 1 outgoing
+      // (o numConnectors >= 2), forma parte real del path y NUNCA se borra.
+      // El recuento de vecinos físicos en grid solo sirve para losetas SUELTAS (no parte del path).
+      const pathConnectors =
+        (cell.incoming ? 1 : 0) +
+        (cell.outgoing?.length ?? 0);
+      if ((cell.incoming && (cell.outgoing?.length ?? 0) >= 1) || cell.numConnectors >= 2 || pathConnectors >= 2) continue;
       // -----------------------------------------------------------
 
       const existingNeighborDirs: Direction[] = [];
