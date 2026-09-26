@@ -72,22 +72,18 @@ export function validateBoard(
   if (startTiles.length !== 1) {
     errors.push(`Debe haber exactamente 1 Inicio, hay ${startTiles.length}`);
   }
-  const minFinals = Math.max(1, (opts.desiredFinals != null ? opts.desiredFinals : 1) - 0);
-  const maxFinals = Math.min(4, desiredFinals + 1);
-  // Permitir rango [desiredFinals-1 .. desiredFinals+1] para estabilidad
-  const flexMinFinals = Math.max(1, minFinals - 1);
-  if (endTiles.length < flexMinFinals) {
+  // --- Cantidad de finales (TOPE GLOBAL 2 en CUALQUIER dificultad) ---
+  const minFinals = desiredFinals <= 1 ? 1 : 1;       // Moderada min 1, Tranquila min 1
+  const maxFinals = desiredFinals <= 1 ? 1 : 2;       // Tope GLOBAL 2 (nunca más)
+  if (endTiles.length < minFinals) {
     errors.push(
-      `Faltan Finales: hay ${endTiles.length}, debe haber mínimo ${flexMinFinals} y máximo ${maxFinals} (objetivo ${desiredFinals}).`
+      `Faltan Finales: hay ${endTiles.length}, debe haber mínimo ${minFinals} y máximo ${maxFinals} (objetivo ${desiredFinals}).`
     );
   }
   if (endTiles.length > maxFinals) {
     errors.push(
-      `Demasiados Finales: hay ${endTiles.length}, debe haber mínimo ${flexMinFinals} y máximo ${maxFinals} (objetivo ${desiredFinals}).`
+      `Demasiados Finales: hay ${endTiles.length}, máximo permitido = ${maxFinals} (objetivo ${desiredFinals}).`
     );
-  }
-  if (endTiles.length > 4) {
-    errors.push(`Máximo 4 Finales, hay ${endTiles.length}`);
   }
 
   // --- [REGLA DURA ESPECIALES: Caja Mágica y Tragamonedas por dificultad] ---

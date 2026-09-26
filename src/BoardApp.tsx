@@ -77,8 +77,6 @@ export function BoardApp() {
         difficulty={difficulty}
         onChangeDifficulty={(d) => {
           setDifficulty(d);
-          const s = boardResult?.seed ?? seed;
-          runGeneration(s, d);
         }}
       />
 

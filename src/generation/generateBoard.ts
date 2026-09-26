@@ -93,7 +93,7 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     minTiles: 30,
     maxTiles: 60,
     minBranchLength: 25,
-    desiredFinals: 3,
+    desiredFinals: 2,
     desvioBudget: 3,
     intersectionProbability: 0.27,
     turnProbability: 0.32,
@@ -101,6 +101,9 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     only1StarPuntos: false,
     puntosDensity: 0.12,
     allow4WayIntersection: false,
+    minCajaMagica: 0,
+    maxCajaMagica: 3,
+    maxTragaMonedas: 2,
   },
   loca: {
     key: 'loca',
