@@ -27,15 +27,9 @@ export function assignColorsToPath(
   patternStartOffset: number = 0
 ): Map<string, ColorAssignment> {
   const assignments = new Map<string, ColorAssignment>();
-  const { grid, startCoord, branchColorOffsets, stepToCoord } = pathResult;
+  const { grid, startCoord, stepToCoord } = pathResult;
 
   const safeOffset = Math.max(0, Math.min(3, Math.floor(patternStartOffset) || 0));
-  const visitedBranches = new Set<number>();
-
-  function effectiveStepForBranch(branchId: number, localIndex: number): number {
-    const branchStart = branchColorOffsets.get(branchId) ?? 0;
-    return branchStart + localIndex;
-  }
 
   const branchLocalCounters = new Map<number, number>();
 
@@ -78,7 +72,6 @@ export function assignColorsToPath(
       assignments.set(key, { color: 'neutral', effectiveStep: cell.pathStep });
     } else if (cell.isIntersection) {
       assignments.set(key, { color: 'neutral', effectiveStep: cell.pathStep });
-      visitedBranches.add(branchId);
       if (localCount < 0) {
         const parentKey = cell.parentStep != null
           ? (() => {
@@ -89,7 +82,6 @@ export function assignColorsToPath(
         const parentAssignment = parentKey ? assignments.get(parentKey) : null;
         const baseStep = parentAssignment?.effectiveStep ?? cell.pathStep;
         branchLocalCounters.set(branchId, baseStep + 1);
-        localCount = baseStep + 1;
       }
     } else {
       if (localCount < 0) {
@@ -100,7 +92,7 @@ export function assignColorsToPath(
             })()
           : null;
         const parentAssignment = parentKey ? assignments.get(parentKey) : null;
-        let startStep = 0;
+        let startStep: number;
         if (parentAssignment && parentAssignment.color !== 'neutral') {
           startStep = (parentAssignment.effectiveStep % 4) + 1;
         } else if (parentAssignment) {
@@ -113,7 +105,6 @@ export function assignColorsToPath(
         localCount = startStep;
       }
 
-      void effectiveStepForBranch(branchId, 0);
       const actualStep = localCount;
       const color = getColorForStep(actualStep);
       assignments.set(key, { color, effectiveStep: actualStep });

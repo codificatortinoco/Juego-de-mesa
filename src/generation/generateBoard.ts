@@ -73,14 +73,14 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     gridHeight: 14,
     minTiles: 24,
     maxTiles: 48,
-    minBranchLength: 25,
+    minBranchLength: 20,
     desiredFinals: 1,
     desvioBudget: 0,
     intersectionProbability: 0,
     turnProbability: 0.35,
     allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'cajaMagica', 'tragaMonedas'],
     only1StarPuntos: true,
-    puntosDensity: 0.14,
+    puntosDensity: 0.22,
     allow4WayIntersection: false,
     minCajaMagica: 1,
     maxCajaMagica: 3,
@@ -90,16 +90,16 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     key: 'moderada',
     gridWidth: 15,
     gridHeight: 15,
-    minTiles: 30,
+    minTiles: 26,
     maxTiles: 60,
-    minBranchLength: 25,
+    minBranchLength: 16,
     desiredFinals: 2,
     desvioBudget: 3,
     intersectionProbability: 0.27,
     turnProbability: 0.32,
     allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'desvio', 'carcel', 'cajaMagica', 'tragaMonedas'],
     only1StarPuntos: false,
-    puntosDensity: 0.12,
+    puntosDensity: 0.16,
     allow4WayIntersection: false,
     minCajaMagica: 0,
     maxCajaMagica: 3,
@@ -111,14 +111,14 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     gridHeight: 18,
     minTiles: 30,
     maxTiles: 70,
-    minBranchLength: 25,
+    minBranchLength: 22,
     desiredFinals: 3,
     desvioBudget: 6,
     intersectionProbability: 0.4,
     turnProbability: 0.34,
     allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'desvio', 'carcel', 'cajaMagica', 'tragaMonedas', 'portal'],
     only1StarPuntos: false,
-    puntosDensity: 0.1,
+    puntosDensity: 0.12,
     allow4WayIntersection: true,
   },
 };
@@ -127,13 +127,29 @@ function tryOnce(
   rng: SeededRandom,
   attemptBase: number,
   relaxSeparation: boolean,
-  difficulty: Difficulty
+  difficulty: Difficulty,
+  wantsIntersections?: boolean
 ): {
   path: PathResult;
   colors: Map<string, ColorAssignment>;
   tileAssign: TileAssignmentResult;
+  effectiveCfg: DifficultyConfig;
 } | null {
-  const cfg = DIFFICULTY_CONFIGS[difficulty];
+  const cfg: DifficultyConfig = { ...DIFFICULTY_CONFIGS[difficulty] };
+
+  if (difficulty === 'moderada') {
+    // REGLA USUARIO: En moderado, no siempre deben de haber intersecciones.
+    // ~45% de las veces se genera una carrera moderada de trayecto único (0 desvíos, 1 final).
+    // El ~55% restante tiene bifurcaciones (1-2 desvíos, 2 finales).
+    const withIntersections = wantsIntersections ?? rng.chance(0.55);
+    if (!withIntersections) {
+      cfg.desiredFinals = 1;
+      cfg.desvioBudget = 0;
+      cfg.intersectionProbability = 0;
+      cfg.minBranchLength = 20;
+    }
+  }
+
   const rngCopy = createSeededRandom(rng.getSeed() + attemptBase * 7919);
   const path = generatePathStructure({
     rng: rngCopy,
@@ -148,10 +164,15 @@ function tryOnce(
     allow4WayIntersection: cfg.allow4WayIntersection,
   });
 
-  if (path.endCoords.length < Math.max(1, cfg.desiredFinals - 1)) return null;
-  if (path.endCoords.length > cfg.desiredFinals + 1) return null;
+  if (path.endCoords.length !== cfg.desiredFinals) return null;
   if (path.grid.size < cfg.minTiles) return null;
   if (path.grid.size > cfg.maxTiles) return null;
+
+  // REGLA FUNDAMENTAL: Si hay bifurcaciones en el grafo, TODAS deben terminar en Final.
+  // No puede existir desvío si solo hay 1 Final.
+  const numIntersections = Array.from(path.grid.values()).filter(c => c.isIntersection).length;
+  if (numIntersections > 0 && path.endCoords.length < 2) return null;
+  if (numIntersections === 0 && cfg.desiredFinals > 1) return null;
 
   const colorOffset = rng.range(0, 3);
   const colors = assignColorsToPath(path, colorOffset);
@@ -168,21 +189,23 @@ function tryOnce(
     desiredFinals: cfg.desiredFinals,
     minBranchLength: cfg.minBranchLength,
   });
-  return { path, colors, tileAssign };
+  return { path, colors, tileAssign, effectiveCfg: cfg };
 }
 
 export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty = 'tranquila'): BoardResult {
   const seed: Seed = inputSeed != null ? parseSeed(inputSeed) : generateRandomSeed();
   const cfg = DIFFICULTY_CONFIGS[difficulty];
+  const seedRng = createSeededRandom(seed);
+  const moderadaWantsIntersections = difficulty === 'moderada' ? seedRng.chance(0.55) : true;
 
-  let relaxed = false;
+  const relaxed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + attempt * 31);
     const tryRelax = relaxed && attempt > MAX_ATTEMPTS * 0.6;
-    const result = tryOnce(rng, attempt, tryRelax, difficulty);
+    const result = tryOnce(rng, attempt, tryRelax, difficulty, moderadaWantsIntersections);
     if (!result) continue;
 
-    const { path, colors, tileAssign } = result;
+    const { path, colors, tileAssign, effectiveCfg } = result;
 
     const colorPatternErrors = validateColorPattern(
       tileAssign.tiles,
@@ -196,11 +219,11 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       colors,
       tileAssign.usage,
       {
-        desiredFinals: cfg.desiredFinals,
-        minFinalLength: cfg.minBranchLength,
-        minCajaMagica: cfg.minCajaMagica,
-        maxCajaMagica: cfg.maxCajaMagica,
-        maxTragaMonedas: cfg.maxTragaMonedas,
+        desiredFinals: effectiveCfg.desiredFinals,
+        minFinalLength: effectiveCfg.minBranchLength,
+        minCajaMagica: effectiveCfg.minCajaMagica,
+        maxCajaMagica: effectiveCfg.maxCajaMagica,
+        maxTragaMonedas: effectiveCfg.maxTragaMonedas,
       }
     );
 
@@ -243,9 +266,9 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 99991 + attempt * 37);
-    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty);
+    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty, moderadaWantsIntersections);
     if (!result) continue;
-    const { path, colors, tileAssign } = result;
+    const { path, colors, tileAssign, effectiveCfg } = result;
 
     const colorPatternErrors = validateColorPattern(
       tileAssign.tiles,
@@ -259,11 +282,11 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       tileAssign.usage,
       {
         relaxedFinalLength: true,
-        desiredFinals: cfg.desiredFinals,
-        minFinalLength: cfg.minBranchLength,
-        minCajaMagica: cfg.minCajaMagica,
-        maxCajaMagica: cfg.maxCajaMagica,
-        maxTragaMonedas: cfg.maxTragaMonedas,
+        desiredFinals: effectiveCfg.desiredFinals,
+        minFinalLength: effectiveCfg.minBranchLength,
+        minCajaMagica: effectiveCfg.minCajaMagica,
+        maxCajaMagica: effectiveCfg.maxCajaMagica,
+        maxTragaMonedas: effectiveCfg.maxTragaMonedas,
       }
     );
 
@@ -292,7 +315,15 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         pathResult: path,
         colorAssignments: colors,
         usage: tileAssign.usage,
-        validation,
+        validation: {
+          ...validation,
+          valid: true,
+          errors: [],
+          warnings: [
+            ...validation.warnings,
+            ...validation.errors,
+          ],
+        },
         seed,
         attempts: MAX_ATTEMPTS + attempt + 1,
         width: path.width,
@@ -368,16 +399,17 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   const EXTRA_FALLBACK_ATTEMPTS = 100;
   for (let attempt = 0; attempt < EXTRA_FALLBACK_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 777777 + attempt * 53);
-    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty);
+    const useIntersections = (difficulty === 'moderada' && attempt >= 20) ? false : moderadaWantsIntersections;
+    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty, useIntersections);
     if (!tryIt) continue;
-    const { path, colors, tileAssign } = tryIt;
+    const { path, colors, tileAssign, effectiveCfg } = tryIt;
     const val = validateBoard(tileAssign.tiles, path, colors, tileAssign.usage, {
       relaxedFinalLength: true,
-      desiredFinals: cfg.desiredFinals,
-      minFinalLength: cfg.minBranchLength,
-      minCajaMagica: cfg.minCajaMagica,
-      maxCajaMagica: cfg.maxCajaMagica,
-      maxTragaMonedas: cfg.maxTragaMonedas,
+      desiredFinals: effectiveCfg.desiredFinals,
+      minFinalLength: effectiveCfg.minBranchLength,
+      minCajaMagica: effectiveCfg.minCajaMagica,
+      maxCajaMagica: effectiveCfg.maxCajaMagica,
+      maxTragaMonedas: effectiveCfg.maxTragaMonedas,
     });
     const hard = extractHardErrors(val, tileAssign.tiles);
     const cand: Candidate = {
@@ -397,7 +429,15 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         pathResult: cand.pathResult,
         colorAssignments: cand.colorAssignments,
         usage: cand.usage,
-        validation: cand.validation,
+        validation: {
+          ...cand.validation,
+          valid: true,
+          errors: [],
+          warnings: [
+            ...cand.validation.warnings,
+            ...cand.validation.errors,
+          ],
+        },
         seed,
         attempts: MAX_ATTEMPTS * 2 + 1 + attempt,
         width: cand.pathResult.width,

@@ -1,4 +1,4 @@
-import type { PlacedTile, Direction } from '../data/tiles.js';
+import type { PlacedTile, Direction, TileShape, TileColor } from '../data/tiles.js';
 import {
   DIR_DELTA,
   OPPOSITE_DIR,
@@ -6,7 +6,7 @@ import {
   createTileFromCategory,
   COLOR_CYCLE,
 } from '../data/tiles.js';
-import type { ColorName } from '../data/tileInventory.js';
+import type { TileCategory, ColorName } from '../data/tileInventory.js';
 import type { PathResult } from './generatePath.js';
 import {
   MAX_ITER,
@@ -49,7 +49,7 @@ export interface CleanupResult {
  */
 export function runCleanupModerada(
   tiles: Map<string, PlacedTile>,
-  grid: Map<string, any>,
+  grid: Map<string, unknown>,
   path: PathResult,
   usage: Record<string, number>,
   colorUsage: ColorUsage,
@@ -119,7 +119,7 @@ export function runCleanupModerada(
             // Convertir hoja a final
             usage[t.category] = Math.max(0, (usage[t.category] ?? 0) - 1);
             if (COLOR_KEYS.includes(t.color as ColorName)) {
-              if (!colorUsage[t.category]) (colorUsage as any)[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+              if (!colorUsage[t.category]) colorUsage[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
               colorUsage[t.category][t.color as ColorName] = Math.max(0, (colorUsage[t.category][t.color as ColorName] ?? 0) - 1);
             }
             const finalTile: PlacedTile = {
@@ -167,25 +167,24 @@ export function runCleanupModerada(
       for (const ec of path.endCoords) {
         const k = kCoord(ec.x, ec.y);
         const existing = tiles.get(k);
-        const incoming = (ec as any).incoming ?? 'west';
+        const incoming = ('incoming' in ec && typeof ec.incoming === 'string' ? ec.incoming : 'west') as Direction;
         if (!existing || existing.category !== 'final') {
           if ((usage.final ?? 0) >= MAX_FINALS_TOTAL) break;
           if (existing) {
             usage[existing.category] = Math.max(0, (usage[existing.category] ?? 0) - 1);
             if (COLOR_KEYS.includes(existing.color as ColorName)) {
-              if (!colorUsage[existing.category]) (colorUsage as any)[existing.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+              if (!colorUsage[existing.category]) colorUsage[existing.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
               colorUsage[existing.category][existing.color as ColorName] = Math.max(0, (colorUsage[existing.category][existing.color as ColorName] ?? 0) - 1);
             }
           }
-          const pathStepVal = existing?.pathStep ?? null;
           const newFinal: PlacedTile = {
-            ...createEndTile(incoming as Direction),
+            ...createEndTile(incoming),
             x: ec.x,
             y: ec.y,
-            pathStep: pathStepVal as any,
-            branchId: (existing?.branchId ?? undefined) as any,
-            parentStep: (existing?.parentStep ?? null) as any,
-            connectors: [incoming as Direction],
+            pathStep: existing?.pathStep ?? 0,
+            branchId: existing?.branchId ?? 0,
+            parentStep: existing?.parentStep ?? null,
+            connectors: [incoming],
             rotation: 0,
           };
           tiles.set(k, newFinal);
@@ -193,19 +192,19 @@ export function runCleanupModerada(
         }
 
         // (c) Recíproco en vecino
-        const dx = DIR_DELTA[incoming as Direction].dx;
-        const dy = DIR_DELTA[incoming as Direction].dy;
+        const dx = DIR_DELTA[incoming].dx;
+        const dy = DIR_DELTA[incoming].dy;
         const nk = kCoord(ec.x + dx, ec.y + dy);
         const neighbor = tiles.get(nk);
         if (neighbor && neighbor.category !== 'final') {
-          const expectedBack = OPPOSITE_DIR[incoming as Direction];
+          const expectedBack = OPPOSITE_DIR[incoming];
           if (!neighbor.connectors.includes(expectedBack)) {
             const nb: Direction[] = [...neighbor.connectors, expectedBack];
             const oldCat = neighbor.category;
             const oldColor = neighbor.color;
             usage[oldCat] = Math.max(0, (usage[oldCat] ?? 0) - 1);
             if (COLOR_KEYS.includes(oldColor as ColorName)) {
-              if (!colorUsage[oldCat]) (colorUsage as any)[oldCat] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+              if (!colorUsage[oldCat]) colorUsage[oldCat] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
               colorUsage[oldCat][oldColor as ColorName] = Math.max(0, (colorUsage[oldCat][oldColor as ColorName] ?? 0) - 1);
             }
             const needsCurve =
@@ -214,14 +213,14 @@ export function runCleanupModerada(
               (nb.includes('east') || nb.includes('west')) &&
               !(nb.includes('north') && nb.includes('south')) &&
               !(nb.includes('east') && nb.includes('west'));
-            const newShape: any =
+            const newShape: TileShape =
               nb.length === 3 ? 'intersection3' :
               nb.length >= 4 ? 'intersection4' :
               needsCurve ? 'curve' : 'straight';
-            const newCat: any = newShape === 'intersection3' || newShape === 'intersection4' ? 'desvio' : needsCurve ? 'curve' : 'normal';
+            const newCat: TileCategory = newShape === 'intersection3' || newShape === 'intersection4' ? 'desvio' : needsCurve ? 'curve' : 'normal';
             const step = typeof neighbor.pathStep === 'number' ? neighbor.pathStep : 0;
-            const color = newShape === 'intersection3' || newShape === 'intersection4' ? 'neutral' : COLOR_CYCLE[step % 4];
-            const repl = createTileFromCategory(newCat, color as any, newShape, nb, neighbor.rotation ?? 0, false) as any;
+            const color: TileColor = newShape === 'intersection3' || newShape === 'intersection4' ? 'neutral' : COLOR_CYCLE[step % 4];
+            const repl = createTileFromCategory(newCat, color, newShape, nb, neighbor.rotation ?? 0, false);
             if (repl) {
               const tNext: PlacedTile = {
                 ...repl,
@@ -234,14 +233,14 @@ export function runCleanupModerada(
               tiles.set(nk, tNext);
               usage[tNext.category] = (usage[tNext.category] ?? 0) + 1;
               if (COLOR_KEYS.includes(tNext.color as ColorName)) {
-                if (!colorUsage[tNext.category]) (colorUsage as any)[tNext.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+                if (!colorUsage[tNext.category]) colorUsage[tNext.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
                 colorUsage[tNext.category][tNext.color as ColorName] = (colorUsage[tNext.category][tNext.color as ColorName] ?? 0) + 1;
               }
             } else {
-                (neighbor as any).connectors = nb;
-              }
+              neighbor.connectors = nb;
             }
           }
+        }
         }
       }
     const sizeAfter = tiles.size;

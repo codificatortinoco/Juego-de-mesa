@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Board } from './components/Board';
 import { GeneratorControls } from './components/GeneratorControls';
 import {
@@ -11,11 +11,18 @@ import './App.css';
 
 export function BoardApp() {
   const [seed, setSeed] = useState<Seed>(() => generateRandomSeed());
-  const [boardResult, setBoardResult] = useState<BoardResult | null>(null);
+  const [difficulty, setDifficulty] = useState<Difficulty>('moderada');
+  const [boardResult, setBoardResult] = useState<BoardResult | null>(() => {
+    try {
+      return generateBoard(seed, 'moderada');
+    } catch (e) {
+      console.error(e);
+      return null;
+    }
+  });
   const [generating, setGenerating] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [difficulty, setDifficulty] = useState<Difficulty>('moderada');
 
   function runGeneration(s: Seed, diff: Difficulty = difficulty) {
     setGenerating(true);
@@ -39,10 +46,6 @@ export function BoardApp() {
       setGenerating(false);
     }
   }
-
-  useEffect(() => {
-    runGeneration(seed, difficulty);
-  }, []);
 
   const tilesMemo = useMemo(
     () => boardResult?.tiles ?? new Map(),

@@ -1,5 +1,6 @@
 import type { TileCategory } from './tileInventory';
 import type { TileColor } from './assetMap';
+export type { TileColor };
 import { getAsset } from './assetMap';
 
 export type Direction = 'north' | 'east' | 'south' | 'west';

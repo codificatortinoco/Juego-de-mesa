@@ -24,6 +24,7 @@ export interface CategoryInventory {
   perColor: InventoryByColor;
   /** sub counts (sólo algunas categorías), colorKeyed si aplica */
   sub?: Partial<Record<SubCategory, number>>;
+  total?: number;
 }
 
 export const TILE_INVENTORY = {
@@ -42,16 +43,16 @@ export const TILE_INVENTORY = {
             sub: { 'portalBlanco': 2, 'portalAzul': 2 } } as CategoryInventory,
   cajaMagica: { perColor: { rojo: 1, rosado: 1, amarillo: 1, azul: 1 } } as CategoryInventory,
   tragaMonedas: { perColor: { rojo: 1, rosado: 1, amarillo: 1, azul: 1 } } as CategoryInventory,
-  inicio: { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 2 } as CategoryInventory & { total: number },
-  final:  { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 3 } as CategoryInventory & { total: number },
+  inicio: { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 2 } as CategoryInventory,
+  final:  { perColor: { rojo: 0, rosado: 0, amarillo: 0, azul: 0 }, total: 3 } as CategoryInventory,
 };
 
 export type TileCategory = keyof typeof TILE_INVENTORY;
 
 export function inventoryCountFor(cat: TileCategory, color?: ColorName): number {
-  const inv = TILE_INVENTORY[cat] as any;
+  const inv = TILE_INVENTORY[cat];
   if (color) return inv.perColor[color] ?? 0;
-  if (inv.total !== undefined) return inv.total as number;
+  if (inv.total !== undefined) return inv.total;
 
   // Conteos según inventario físico verificado (total 92 piezas).
   // Ciertas categorías usan `sub` como fuente canónica (desvíos, portales, springs,

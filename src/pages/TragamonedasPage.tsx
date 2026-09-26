@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { CardModal } from "../components/CardModal";
 
 const TRAGAMONEDAS_IMAGES = import.meta.glob("/src/assets/Tragamonedas/*.svg", {
@@ -13,18 +13,16 @@ function pickRandom<T>(arr: T[]): T {
 
 export function TragamonedasPage() {
   const cards = useMemo(() => Object.values(TRAGAMONEDAS_IMAGES), []);
-  const [current, setCurrent] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState<string | null>(() =>
+    cards.length > 0 ? pickRandom(cards) : null
+  );
+  const [open, setOpen] = useState(() => cards.length > 0);
 
   const drawCard = useCallback(() => {
     const next = cards.length > 0 ? pickRandom(cards) : null;
     setCurrent(next);
     setOpen(true);
   }, [cards]);
-
-  useEffect(() => {
-    if (cards.length > 0) drawCard();
-  }, []);
 
   return (
     <div className="card-page tragamonedas-page">

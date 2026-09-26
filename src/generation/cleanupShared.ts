@@ -1,4 +1,4 @@
-import type { Direction, TileShape, PlacedTile } from '../data/tiles.js';
+import type { Direction, TileShape, PlacedTile, TileColor } from '../data/tiles.js';
 import {
   DIR_DELTA,
   OPPOSITE_DIR,
@@ -46,7 +46,7 @@ export function getDistFallback(
 /** Borra una celda y DESCONECTA sus vecinos recíprocos, reconstruyendo shape/category. */
 export function removeTileAndDisconnect(
   tiles: Map<string, PlacedTile>,
-  grid: Map<string, any> | undefined,
+  grid: Map<string, unknown> | undefined,
   usage: Record<string, number>,
   colorUsage: ColorUsage,
   keyToRemove: string
@@ -55,7 +55,8 @@ export function removeTileAndDisconnect(
   if (!t) return;
   // Desconectar vecinos
   for (const conn of t.connectors.slice()) {
-    let { dx, dy } = DIR_DELTA[conn];
+    let dx = DIR_DELTA[conn].dx;
+    const dy = DIR_DELTA[conn].dy;
     if (t.shape === 'start' && conn === 'east') dx = 2;
     const nx = t.x + dx;
     const ny = t.y + dy;
@@ -79,7 +80,7 @@ export function removeTileAndDisconnect(
   // Actualizar usage del tile borrado
   usage[t.category] = Math.max(0, (usage[t.category] ?? 0) - 1);
   if (COLOR_KEYS.includes(t.color as ColorName)) {
-    if (!colorUsage[t.category]) (colorUsage as any)[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+    if (!colorUsage[t.category]) colorUsage[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
     colorUsage[t.category][t.color as ColorName] = Math.max(
       0,
       (colorUsage[t.category][t.color as ColorName] ?? 0) - 1
@@ -99,13 +100,13 @@ function rebuildNeighborMeta(
 ) {
   if (neighbor.category === 'inicio') return;
   if (neighbor.category === 'final') {
-    (neighbor as any).connectors = newConnectors;
+    neighbor.connectors = newConnectors;
     return;
   }
   // Restar old usage
   usage[neighbor.category] = Math.max(0, (usage[neighbor.category] ?? 0) - 1);
   if (COLOR_KEYS.includes(neighbor.color as ColorName)) {
-    if (!colorUsage[neighbor.category]) (colorUsage as any)[neighbor.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+    if (!colorUsage[neighbor.category]) colorUsage[neighbor.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
     colorUsage[neighbor.category][neighbor.color as ColorName] = Math.max(
       0,
       (colorUsage[neighbor.category][neighbor.color as ColorName] ?? 0) - 1
@@ -132,8 +133,8 @@ function rebuildNeighborMeta(
     newCat = 'desvio';
   }
   const step = typeof neighbor.pathStep === 'number' ? neighbor.pathStep : 0;
-  const color = newShape === 'intersection3' || newShape === 'intersection4'
-    ? ('neutral' as any)
+  const color: TileColor = newShape === 'intersection3' || newShape === 'intersection4'
+    ? 'neutral'
     : COLOR_CYCLE[step % 4];
 
   const repl = createTileFromCategory(
@@ -153,18 +154,19 @@ function rebuildNeighborMeta(
       pathStep: neighbor.pathStep,
       branchId: neighbor.branchId,
       parentStep: neighbor.parentStep,
+      connectors: newConnectors,
     };
     tiles.set(nk, t);
     usage[t.category] = (usage[t.category] ?? 0) + 1;
     if (COLOR_KEYS.includes(t.color as ColorName)) {
-      if (!colorUsage[t.category]) (colorUsage as any)[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+      if (!colorUsage[t.category]) colorUsage[t.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
       colorUsage[t.category][t.color as ColorName] = (colorUsage[t.category][t.color as ColorName] ?? 0) + 1;
     }
   } else {
-    (neighbor as any).connectors = newConnectors;
+    neighbor.connectors = newConnectors;
     usage[neighbor.category] = (usage[neighbor.category] ?? 0) + 1;
     if (COLOR_KEYS.includes(neighbor.color as ColorName)) {
-      if (!colorUsage[neighbor.category]) (colorUsage as any)[neighbor.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
+      if (!colorUsage[neighbor.category]) colorUsage[neighbor.category] = { rojo: 0, rosado: 0, amarillo: 0, azul: 0 };
       colorUsage[neighbor.category][neighbor.color as ColorName] =
         (colorUsage[neighbor.category][neighbor.color as ColorName] ?? 0) + 1;
     }
@@ -189,7 +191,8 @@ export function bfsFromStart(
     if (!tile) continue;
     const d = distance.get(k) ?? 0;
     for (const conn of tile.connectors) {
-      let { dx, dy } = DIR_DELTA[conn];
+      let dx = DIR_DELTA[conn].dx;
+      const dy = DIR_DELTA[conn].dy;
       if (tile.shape === 'start' && conn === 'east') dx = 2;
       const nx = tile.x + dx;
       const ny = tile.y + dy;

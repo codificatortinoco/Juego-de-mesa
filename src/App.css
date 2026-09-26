@@ -131,7 +131,7 @@
 
 .difficulty-group {
   display: inline-flex;
-  gap: 0;
+  gap: 8px;
   padding: 5px;
   background: var(--c-azul);
   border-radius: 999px;
@@ -267,7 +267,8 @@ button.btn-rojo {
 /* Seed row */
 
 .seed-row {
-  gap: 14px;
+  gap: 16px;
+
 }
 
 .seed-label {
@@ -442,6 +443,7 @@ button.btn-rojo {
 
 .board-toolbar.compact {
   padding: 2px 2px 4px;
+  gap: 24px;
 }
 
 .board-toolbar.compact button {

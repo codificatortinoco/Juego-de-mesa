@@ -187,7 +187,7 @@ export function generatePathStructure(
 
   // Colocar primera celda: incoming = west (desde el Start),
   // outgoing lo decidiremos en la primera iteración del loop
-  let firstCell: GridCell = {
+  const firstCell: GridCell = {
     x: firstX,
     y: firstY,
     incoming: 'west',
@@ -246,7 +246,6 @@ export function generatePathStructure(
   let finalsPlaced = 0;
   let usedDesvios = 0;
   let nextBranchId = 1;
-  nextBranchId = nextBranchId;
 
   interface ActiveHead {
     x: number;
@@ -352,7 +351,8 @@ export function generatePathStructure(
       }
 
       // No hay más giros. Colocar Final si longitud suficiente.
-      if (head.length >= minBranchLength && finalsPlaced < desiredFinals) {
+      const minLenThreshold = Math.min(minBranchLength, 15);
+      if (head.length >= minLenThreshold && finalsPlaced < desiredFinals) {
         const hCell = grid.get(headKey)!;
         hCell.isEnd = true;
         hCell.outgoing = [];
@@ -527,7 +527,7 @@ export function generatePathStructure(
         x: nextX,
         y: nextY,
         prevDir: extraDirForBifurcation,
-        length: 1,
+        length: head.length,
         branchId: newBranchId,
         alive: true,
       });
@@ -535,13 +535,14 @@ export function generatePathStructure(
   }
 
   // Heads que siguen vivos después del loop → cerrarlos como Finales (si cabe) o descartar.
+  const minThreshold = Math.min(minBranchLength, 15);
   for (const head of heads) {
     if (!head.alive) continue;
     const hKey = coordKey(head.x, head.y);
     if (finalsPlaced < desiredFinals) {
       const hCell = grid.get(hKey);
       // Sólo setear isEnd si la celda es verdadera HOJA: outgoing vacío (no parte del medio de una rama).
-      if (hCell && !hCell.isStart && !hCell.isEnd && (hCell.outgoing?.length ?? 0) === 0 && head.length >= minBranchLength) {
+      if (hCell && !hCell.isStart && !hCell.isEnd && (hCell.outgoing?.length ?? 0) === 0 && head.length >= minThreshold) {
         hCell.isEnd = true;
         hCell.outgoing = [];
         const s = new Set<Direction>();
@@ -564,7 +565,7 @@ export function generatePathStructure(
     if (aliveHead) {
       const hKey = coordKey(aliveHead.x, aliveHead.y);
       const hCell = grid.get(hKey);
-      if (hCell && !hCell.isStart && !hCell.isEnd && (hCell.outgoing?.length ?? 0) === 0 && aliveHead.length >= minBranchLength) {
+      if (hCell && !hCell.isStart && !hCell.isEnd && (hCell.outgoing?.length ?? 0) === 0 && aliveHead.length >= minThreshold) {
         hCell.isEnd = true;
         hCell.outgoing = [];
         const countSet = new Set<Direction>();
@@ -579,13 +580,12 @@ export function generatePathStructure(
       }
     }
     // Buscar cualquier celda no-Start/no-End que sea HOJA y con pathStep MÁXIMO (más alejada en el recorrido REAL).
-    // Fallback anterior Manhattan = bug visual (Final en medio del path).
     let best: GridCell | null = null;
     let bestStep = -1;
     for (const c of grid.values()) {
       if (c.isStart || c.isEnd) continue;
       if ((c.outgoing?.length ?? 0) !== 0) continue; // debe ser HOJA (no continuar nada después)
-      if (c.pathStep > bestStep && c.pathStep >= minBranchLength) {
+      if (c.pathStep > bestStep && c.pathStep >= minThreshold) {
         bestStep = c.pathStep;
         best = c;
       }
@@ -671,7 +671,6 @@ export function generatePathStructure(
       const ec = endCoords[i];
       if (!grid.has(coordKey(ec.x, ec.y)) && !startOccupancy.has(coordKey(ec.x, ec.y))) {
         endCoords.splice(i, 1);
-        finalsPlaced = endCoords.length;
       }
     }
   }
@@ -797,7 +796,6 @@ export function generatePathStructure(
             if (hadIt) origFull.push(d);
           }
           const removed = keptOutgoing.pop()!;
-          keptIncoming = keptIncoming;
           keptOutgoing.length = Math.min(keptOutgoing.length, 2);
           removedDir = removed;
           // forzamos allDirs4 = keptIncoming + keptOutgoing (3)
@@ -963,7 +961,72 @@ export function generatePathStructure(
     }
   }
 
-  const branchesCount = nextBranchId;
+  // --- [7] PODA RIGUROSA DE RAMAS MUERTAS (Backward Reachability desde los Finales) ---
+  // Garantía absoluta: CUALQUIER celda que no tenga un camino dirigido hacia alguno de los
+  // finalEnds es eliminada completamente del grafo. Si un desvío pierde una rama y queda
+  // con solo 1 salida, se revierte a celda normal (no-intersección).
+  const reachableFromFinal = new Set<string>();
+  const revQ: string[] = [];
+  for (const fe of finalEnds) {
+    const k = coordKey(fe.x, fe.y);
+    reachableFromFinal.add(k);
+    revQ.push(k);
+  }
+
+  while (revQ.length > 0) {
+    const currKey = revQ.shift()!;
+    for (const [pk, pCell] of grid.entries()) {
+      if (reachableFromFinal.has(pk)) continue;
+      for (const od of pCell.outgoing) {
+        let dx = DIR_DELTA[od].dx;
+        const dy = DIR_DELTA[od].dy;
+        if (pCell.isStart && od === 'east') dx = 2;
+        if (coordKey(pCell.x + dx, pCell.y + dy) === currKey) {
+          reachableFromFinal.add(pk);
+          revQ.push(pk);
+          break;
+        }
+      }
+    }
+  }
+
+  reachableFromFinal.add(coordKey(startX, startY));
+
+  // Eliminar celdas que no llevan a ningún final
+  for (const [k, cell] of Array.from(grid.entries())) {
+    if (!reachableFromFinal.has(k) && !cell.isStart) {
+      grid.delete(k);
+      coordToStep.delete(k);
+    }
+  }
+
+  // Sincronizar stepToCoord
+  for (const [step, coord] of Array.from(stepToCoord.entries())) {
+    const k = coordKey(coord.x, coord.y);
+    if (!grid.has(k)) {
+      stepToCoord.delete(step);
+    }
+  }
+
+  // Reajustar outgoing, conectores e isIntersection para celdas supervivientes
+  for (const cell of grid.values()) {
+    if (cell.isEnd) {
+      cell.outgoing = [];
+      cell.numConnectors = cell.incoming ? 1 : 0;
+      cell.isIntersection = false;
+      continue;
+    }
+    cell.outgoing = cell.outgoing.filter((od) => {
+      let dx = DIR_DELTA[od].dx;
+      const dy = DIR_DELTA[od].dy;
+      if (cell.isStart && od === 'east') dx = 2;
+      return grid.has(coordKey(cell.x + dx, cell.y + dy));
+    });
+    cell.numConnectors = (cell.incoming ? 1 : 0) + cell.outgoing.length;
+    cell.isIntersection = cell.outgoing.length >= 2;
+  }
+
+  const branchesCount = Array.from(grid.values()).filter((c) => c.isIntersection).length + 1;
 
   return {
     grid,
