@@ -305,7 +305,30 @@ button.btn-rojo {
 }
 
 .seed-apply {
-  margin-left: -2px;
+  margin-left: 2px;
+  padding: 6px 14px;
+  font-size: 13px;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    var(--shadow-memes-sm);
+}
+
+.seed-apply:hover:not(:disabled) {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    3px 3px 0 0 var(--c-negro);
+}
+
+.seed-apply:active:not(:disabled) {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    1px 1px 0 0 var(--c-negro);
 }
 
 .attempts {
@@ -446,8 +469,34 @@ button.btn-rojo {
   gap: 24px;
 }
 
+.board-toolbar button {
+  padding: 5px 12px;
+  font-size: 12px;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    var(--shadow-memes-sm);
+}
+
+.board-toolbar button:hover:not(:disabled) {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    3px 3px 0 0 var(--c-negro);
+}
+
+.board-toolbar button:active:not(:disabled) {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px var(--c-azul),
+    0 0 0 7px var(--c-negro),
+    1px 1px 0 0 var(--c-negro);
+}
+
 .board-toolbar.compact button {
-  padding: 8px 12px;
+  padding: 5px 12px;
   font-size: 12px;
 }
 
@@ -537,8 +586,10 @@ button.btn-rojo {
   font-family: var(--font-body);
   font-size: 13px;
   color: #3b4055;
-  padding: 0 4px;
+  padding: 0 8px;
   font-weight: 700;
+  text-align: right;
+  margin-left: auto;
 }
 
 .board-dimensions.compact {

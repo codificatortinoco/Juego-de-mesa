@@ -1,14 +1,12 @@
 import { useState } from 'react';
-import { generateRandomSeed, parseSeed, type Seed } from '../generation/seededRandom';
+import { parseSeed, type Seed } from '../generation/seededRandom';
 import type { Difficulty } from '../generation/generateBoard';
 
 interface GeneratorControlsProps {
   seed: Seed;
-  attempts: number;
   generating: boolean;
   onGenerateNew: () => void;
-  onRegenerateSame: () => void;
-  onNewSeedAndGenerate: (s: Seed) => void;
+  onApplySeed: (s: Seed) => void;
   showDebug: boolean;
   onToggleDebug: (v: boolean) => void;
   difficulty: Difficulty;
@@ -18,18 +16,22 @@ interface GeneratorControlsProps {
 export function GeneratorControls(props: GeneratorControlsProps) {
   const {
     seed,
-    attempts,
     generating,
     onGenerateNew,
-    onRegenerateSame,
-    onNewSeedAndGenerate,
+    onApplySeed,
     showDebug,
     onToggleDebug,
     difficulty,
     onChangeDifficulty,
   } = props;
 
+  const [prevSeed, setPrevSeed] = useState<Seed>(seed);
   const [seedInput, setSeedInput] = useState<string>(String(seed));
+
+  if (seed !== prevSeed) {
+    setPrevSeed(seed);
+    setSeedInput(String(seed));
+  }
 
   const difficulties: { value: Difficulty; label: string; hint: string }[] = [
     { value: 'tranquila', label: 'Tranquila', hint: 'Estrellas e izquierda/derecha' },
@@ -56,20 +58,7 @@ export function GeneratorControls(props: GeneratorControlsProps) {
 
       <div className="controls-row">
         <button className="primary" onClick={onGenerateNew} disabled={generating}>
-          {generating ? 'Generando…' : '🎲 Generar mapa'}
-        </button>
-        <button onClick={onRegenerateSame} disabled={generating}>
-          🔁 Regenerar misma seed
-        </button>
-        <button
-          onClick={() => {
-            const s = generateRandomSeed();
-            setSeedInput(String(s));
-            onNewSeedAndGenerate(s);
-          }}
-          disabled={generating}
-        >
-          ✨ Nueva seed
+          {generating ? 'Generando…' : '🎲 Generar nuevo mapa'}
         </button>
       </div>
 
@@ -84,7 +73,7 @@ export function GeneratorControls(props: GeneratorControlsProps) {
               if (e.key === 'Enter') {
                 const s = parseSeed(seedInput);
                 setSeedInput(String(s));
-                onNewSeedAndGenerate(s);
+                onApplySeed(s);
               }
             }}
             className="seed-input"
@@ -95,15 +84,12 @@ export function GeneratorControls(props: GeneratorControlsProps) {
           onClick={() => {
             const s = parseSeed(seedInput);
             setSeedInput(String(s));
-            onNewSeedAndGenerate(s);
+            onApplySeed(s);
           }}
           disabled={generating}
         >
           Aplicar
         </button>
-        <span className="attempts">
-          Intentos: <strong>{attempts}</strong>
-        </span>
       </div>
 
       <div className="controls-row">

@@ -60,18 +60,13 @@ export function BoardApp() {
 
       <GeneratorControls
         seed={boardResult?.seed ?? seed}
-        attempts={boardResult?.attempts ?? 0}
         generating={generating}
         onGenerateNew={() => {
           const s = generateRandomSeed();
           setSeed(s);
           runGeneration(s, difficulty);
         }}
-        onRegenerateSame={() => {
-          const s = boardResult?.seed ?? seed;
-          runGeneration(s, difficulty);
-        }}
-        onNewSeedAndGenerate={(s) => {
+        onApplySeed={(s) => {
           setSeed(s);
           runGeneration(s, difficulty);
         }}
