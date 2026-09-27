@@ -56,6 +56,8 @@ interface AssignOptions {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  maxPortals?: number;
+  portalSpawnRate?: number;
   desiredFinals?: number;
   minBranchLength?: number;
 }
@@ -231,7 +233,6 @@ export function assignTilesToPath(
   };
   let lastPickedSpringSubtype: SpringSubtype | null = null;
   let pendingPortalFamily: PortalFamily | null = null;
-  let pendingPortalPlacementTries = 0;
 
   const desv3Max = TILE_INVENTORY.desvio.sub?.desv3 ?? 0;
   const desv4Max = TILE_INVENTORY.desvio.sub?.desv4 ?? 0;
@@ -241,8 +242,8 @@ export function assignTilesToPath(
   // Pre-cleanup modular: si !allow4WayIntersection, transformar I4 a I3
   preTransformI4ToI3(grid, startCoord, allow4WayIntersection);
 
-  const PORTAL_MIN_FINAL_MANHATTAN = 7;
-  const PORTAL_MIN_SEP_STEPS = 6;
+  const PORTAL_MIN_FINAL_DIST = 6;
+  const PORTAL_MIN_SEP_STEPS = 8;
   const portalUsageByFamily: Record<PortalFamily, { steps: number[]; coords: { x: number; y: number }[]; usedKeys: Set<string> }> = {
     blanco: { steps: [], coords: [], usedKeys: new Set() },
     azul:   { steps: [], coords: [], usedKeys: new Set() },
@@ -262,11 +263,43 @@ export function assignTilesToPath(
     if (famData.usedKeys.size >= 2) return false;
     const otherFam: PortalFamily = fam === 'blanco' ? 'azul' : 'blanco';
     const otherFamData = portalUsageByFamily[otherFam];
-    if (theEndCoords.some(ec => manhattan(cell, ec) < PORTAL_MIN_FINAL_MANHATTAN)) return false;
+
+    // En moderada (maxPortals === 2): ambas losetas deben ser del mismo color/familia
+    if (options.maxPortals === 2 && otherFamData.usedKeys.size > 0) return false;
+
+    // Regla: distancia a CUALQUIER ficha de final >= 6 espacios (en pasos del recorrido) y Manhattan >= 2
+    for (const ec of theEndCoords) {
+      if (manhattan(cell, ec) < 2) return false;
+      const endCell = grid.get(`${ec.x},${ec.y}`);
+      if (endCell && Math.abs(cell.pathStep - endCell.pathStep) < PORTAL_MIN_FINAL_DIST) return false;
+    }
+
+    // Si es el PRIMER inodoro de la familia que se coloca:
+    if (famData.usedKeys.size === 0) {
+      if (cell.pathStep < 2) return false;
+      // Comprobar que en allCells existen celdas rectas futuras a >= 8 pasos y a >= 6 de los finales
+      const hasFutureSlot = allCells.some(c =>
+        c.pathStep >= cell.pathStep + PORTAL_MIN_SEP_STEPS &&
+        classifyShape(c) === 'straight' &&
+        theEndCoords.every(ec => {
+          const endCell = grid.get(`${ec.x},${ec.y}`);
+          const sDist = endCell ? Math.abs(c.pathStep - endCell.pathStep) : 99;
+          const mDist = manhattan(c, ec);
+          return sDist >= PORTAL_MIN_FINAL_DIST && mDist >= 2;
+        })
+      );
+      if (!hasFutureSlot) return false;
+    }
+
+    // Si es el SEGUNDO inodoro de la familia:
     if (famData.usedKeys.size === 1) {
       const lastStep = famData.steps[famData.steps.length - 1];
-      if (Math.abs(cell.pathStep - lastStep) < 2) return false;
+      if (Math.abs(cell.pathStep - lastStep) < PORTAL_MIN_SEP_STEPS) return false;
+      const lastCoord = famData.coords[famData.coords.length - 1];
+      if (manhattan(cell, lastCoord) < 4) return false;
     }
+
+    // Si hay otra familia (por ejemplo en dificultad Loca):
     if (otherFamData.steps.length > 0) {
       const minOtherStep = Math.min(...otherFamData.steps);
       const maxOtherStep = Math.max(...otherFamData.steps);
@@ -489,12 +522,6 @@ export function assignTilesToPath(
       if (pendingPortalFamily && !needsCurve) {
         if (isPortalPlaceable(pendingPortalFamily, cell, endCoords)) {
           forcePortalFamily = pendingPortalFamily;
-        } else {
-          pendingPortalPlacementTries++;
-          if (pendingPortalPlacementTries >= 6) {
-            pendingPortalFamily = null;
-            pendingPortalPlacementTries = 0;
-          }
         }
       }
       const pendingPairSubtypes = currentValidSprings.filter(s => (springSubtypeUsage[s] ?? 0) === 1);
@@ -517,14 +544,19 @@ export function assignTilesToPath(
 
       if (forcePortalFamily || forcePendingPair || rng.chance(specialProb)) {
           const canMove = movementCooldown <= 0 || !!forcePendingPair;
-          const availableFamilies: PortalFamily[] = (['blanco', 'azul'] as PortalFamily[]).filter(f =>
-            allowedSet.has('portal') &&
-            remaining('portal') > (pendingPortalFamily ? 0 : 1) &&
-            !isPortalFamilyComplete(f) &&
-            (forcePortalFamily === f || isPortalPlaceable(f, cell, endCoords)) &&
-            // NUEVA REGLA: si ya se colocó un portal recientemente (mismo tipo) saltar
-            ((cooldownByCategory['portal'] ?? 0) <= 0 || forcePortalFamily === f)
-          );
+          const totalPortalsUsed = portalUsageByFamily.blanco.usedKeys.size + portalUsageByFamily.azul.usedKeys.size;
+          const availableFamilies: PortalFamily[] = (['blanco', 'azul'] as PortalFamily[]).filter(f => {
+            if (!allowedSet.has('portal')) return false;
+            if (options.maxPortals != null && totalPortalsUsed >= options.maxPortals && pendingPortalFamily !== f) return false;
+            if (options.maxPortals === 2) {
+              const otherFam: PortalFamily = f === 'blanco' ? 'azul' : 'blanco';
+              if (portalUsageByFamily[otherFam].usedKeys.size > 0) return false;
+            }
+            if (isPortalFamilyComplete(f)) return false;
+            if (remaining('portal') < (pendingPortalFamily === f ? 1 : 2)) return false;
+            if (forcePortalFamily) return forcePortalFamily === f;
+            return isPortalPlaceable(f, cell, endCoords) && ((cooldownByCategory['portal'] ?? 0) <= 0);
+          });
 
           if (forcePortalFamily && availableFamilies.includes(forcePortalFamily)) {
             category = 'portal';
@@ -606,7 +638,6 @@ export function assignTilesToPath(
                   cooldownByCategory['portal'] = minSameCategoryGap;
                   if (!pendingPortalFamily) {
                     pendingPortalFamily = fam;
-                    pendingPortalPlacementTries = 0;
                   }
                 } else if (MOVEMENT_CATEGORIES.includes(pick)) {
                   const selectedSub = pickSpringSubtypeForCategory(pick, currentValidSprings, rng);
@@ -771,8 +802,8 @@ export function assignTilesToPath(
     if (!allowedSet.has(category) || remaining(category) <= 0 ||
         (!nowNeutral && !pickAvailableColorFor(category, assignedColor, cell.pathStep, rng))) {
       const fbCandidates: TileCategory[] = needsCurve
-        ? (['curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal', 'normal'] as TileCategory[])
-        : (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal', 'avanzar', 'retroceder', 'desvio'] as TileCategory[]);
+        ? (['curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'normal'] as TileCategory[])
+        : (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'avanzar', 'retroceder', 'desvio'] as TileCategory[]);
       for (const c of fbCandidates) {
         if (!allowedSet.has(c) || remaining(c) <= 0) continue;
         if (c === 'desvio' || c === 'inicio' || c === 'final') continue;
@@ -941,7 +972,7 @@ export function assignTilesToPath(
       // REGLA DURA IGUAL para categorías alternativas: NO cambiar curve↔straight.
       // ADEMÁS: en cells CURVA, no usar cajaMagica/tragaMonedas (son SVGs rectos → solapamiento).
       // ADEMÁS: respetar maxCajaMagica/maxTragaMonedas si están definidos.
-      const allAltCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal'] as TileCategory[]);
+      const allAltCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica'] as TileCategory[]);
       const altCats = allAltCats.filter(c => allowedSet.has(c) && remaining(c) > 0 &&
         !(needsCurve && (c === 'cajaMagica' || c === 'tragaMonedas')) &&
         !(c === 'cajaMagica' && typeof options.maxCajaMagica === 'number' && (usage.cajaMagica ?? 0) >= options.maxCajaMagica) &&
@@ -1055,7 +1086,6 @@ export function assignTilesToPath(
         portalUsageByFamily[fam].coords.push({ x: cell.x, y: cell.y });
         if (portalUsageByFamily[fam].usedKeys.size >= 2) {
           pendingPortalFamily = null;
-          pendingPortalPlacementTries = 0;
         }
       }
     }
@@ -1065,6 +1095,30 @@ export function assignTilesToPath(
     }
     if (movementCooldown > 0) movementCooldown--;
   }
+
+  // Reversión inmediata si alguna familia de portales quedó con un solo inodoro
+  for (const fam of ['blanco', 'azul'] as PortalFamily[]) {
+    if (portalUsageByFamily[fam].usedKeys.size === 1) {
+      for (const t of tiles.values()) {
+        if (t.category === 'portal' && PORTAL_FAMILY_BY_KEY[t.assetKey] === fam) {
+          const normCol = (t.color === 'neutral' ? COLOR_CYCLE[t.pathStep % 4] : t.color) as ColorName;
+          t.category = 'normal';
+          t.isNeutral = false;
+          t.special = false;
+          t.color = normCol;
+          t.assetKey = `Recta-${normCol}`;
+          t.id = `normal-${t.x}-${t.y}-${t.pathStep}`;
+          usage.portal = Math.max(0, usage.portal - 1);
+          usage.normal = (usage.normal || 0) + 1;
+          incrementColorUsage('normal', normCol);
+        }
+      }
+      portalUsageByFamily[fam].usedKeys.clear();
+      portalUsageByFamily[fam].steps = [];
+      portalUsageByFamily[fam].coords = [];
+    }
+  }
+  pendingPortalFamily = null;
 
   for (const [key, cell] of grid) {
     if (tiles.has(key)) continue;
@@ -1098,7 +1152,7 @@ export function assignTilesToPath(
       // REGLA DURA EN FALLBACK: si classifyShape=curve, SOLO probamos category='curve'.
       priorityCats.push('curve');
     } else {
-      priorityCats.push(...(['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal', 'avanzar', 'retroceder'] as TileCategory[]).filter(c => allowedSet.has(c)
+      priorityCats.push(...(['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'avanzar', 'retroceder'] as TileCategory[]).filter(c => allowedSet.has(c)
         && (!MOVEMENT_CATEGORIES.includes(c) || fbValidSprings.some(s => SPRING_SUBTYPE_INFO[s].category === c))));
     }
     let placed: PlacedTile | null = null;
@@ -1193,7 +1247,7 @@ export function assignTilesToPath(
         const tryShapes: TileShape[] = ['straight'];
         let anyColor: TileColor | null = null;
         // STRICT: solo categorías con remaining > 0 100% (sin fallback sin comprobar inv)
-        const allowedAnyCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica', 'portal'] as TileCategory[]).filter(c => allowedSet.has(c) && remaining(c) > 0);
+        const allowedAnyCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica'] as TileCategory[]).filter(c => allowedSet.has(c) && remaining(c) > 0);
         anyCat = allowedAnyCats[0] ?? null;
         if (anyCat) {
           if (anyCat === 'desvio' || anyCat === 'inicio' || anyCat === 'final') {
@@ -1326,7 +1380,7 @@ export function assignTilesToPath(
   }
 
   // --- [PAREJAS DE INODOROS (PORTALES)] ---
-  ensurePortalPairs(tiles, allowedSet, remaining, usage, colorUsage);
+  ensurePortalPairs(tiles, allowedSet, remaining, usage, colorUsage, options);
 
   enforceFinalEndpoints(tiles, grid, endCoords, usage, errors);
   enforceStartNeighbor(tiles, grid, startCoord, usage, errors);
@@ -1347,6 +1401,30 @@ export function assignTilesToPath(
     minBranchLength: options.minBranchLength,
     desiredFinals: options.desiredFinals ?? 2,
   });
+
+  // --- [GARANTÍA FINAL: NINGÚN INODORO HUÉRFANO] ---
+  for (const t of Array.from(tiles.values())) {
+    if (t.category === 'portal') {
+      const pairAsset = PORTAL_PAIRS[t.assetKey];
+      const hasPair = Array.from(tiles.values()).some(
+        other => other.category === 'portal' && other.assetKey === pairAsset
+      );
+      if (!hasPair) {
+        const normCol = (t.color === 'neutral' ? COLOR_CYCLE[t.pathStep % 4] : t.color) as ColorName;
+        t.category = 'normal';
+        t.isNeutral = false;
+        t.special = false;
+        t.color = normCol;
+        t.assetKey = `Recta-${normCol}`;
+        t.id = `normal-${t.x}-${t.y}-${t.pathStep}`;
+        usage.portal = Math.max(0, usage.portal - 1);
+        usage.normal = (usage.normal || 0) + 1;
+        if (COLOR_KEYS.includes(normCol)) {
+          colorUsage.normal[normCol] = (colorUsage.normal[normCol] || 0) + 1;
+        }
+      }
+    }
+  }
 
   return { tiles, usage, errors };
 }

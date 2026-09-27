@@ -1,4 +1,4 @@
-import type { Direction, PlacedTile, TileShape } from '../data/tiles';
+import type { Direction, PlacedTile, TileShape, PortalFamily } from '../data/tiles';
 import {
   DIR_DELTA,
   OPPOSITE_DIR,
@@ -8,6 +8,7 @@ import {
   createEndTile,
   findRotationToMatch,
   rotateConnectors,
+  PORTAL_PAIR_MEMBER,
 } from '../data/tiles';
 import type { TileCategory, ColorName } from '../data/tileInventory';
 import { getAsset } from '../data/assetMap';
@@ -27,18 +28,51 @@ export interface PostAdjustOptions {
   maxTragaMonedas?: number;
 }
 
+function revertPortalToNormal(
+  tile: PlacedTile,
+  usage: Record<TileCategory, number>,
+  colorUsage: ColorUsage
+): void {
+  const normCol = (tile.color === 'neutral' ? COLOR_CYCLE[tile.pathStep % 4] : tile.color) as ColorName;
+  tile.category = 'normal';
+  tile.isNeutral = false;
+  tile.special = false;
+  tile.color = normCol;
+  tile.assetKey = `Recta-${normCol}`;
+  tile.id = `normal-${tile.x}-${tile.y}-${tile.pathStep}`;
+  usage.portal = Math.max(0, usage.portal - 1);
+  usage.normal = (usage.normal || 0) + 1;
+  if (COLOR_KEYS.includes(normCol)) {
+    colorUsage.normal[normCol] = (colorUsage.normal[normCol] || 0) + 1;
+  }
+}
+
 /**
  * Garantiza que si existe un portal colocado, también exista su pareja correspondiente.
+ * REGLAS USUARIO:
+ * 1. No puede haber un solo inodoro en la carrera (deben ser 0 o 2 por familia).
+ * 2. Si hay pareja, deben estar al menos a 8 o 9 espacios entre sí.
+ * 3. Deben estar al menos a 6 espacios de cualquier loseta de Final.
+ * 4. Si una loseta portal no tiene pareja y no se puede colocar una válida, se revierte a 'normal'.
  */
 export function ensurePortalPairs(
   tiles: Map<string, PlacedTile>,
   allowedSet: Set<TileCategory>,
   remaining: (cat: TileCategory) => number,
   usage: Record<TileCategory, number>,
-  colorUsage: ColorUsage
+  colorUsage: ColorUsage,
+  _options?: { maxPortals?: number }
 ): void {
-  if (!allowedSet.has('portal')) return;
+  if (!allowedSet.has('portal')) {
+    for (const t of tiles.values()) {
+      if (t.category === 'portal') {
+        revertPortalToNormal(t, usage, colorUsage);
+      }
+    }
+    return;
+  }
 
+  const endTiles = Array.from(tiles.values()).filter(t => t.category === 'final' || t.shape === 'end');
   const placedByAsset: Record<string, PlacedTile> = {};
   for (const t of tiles.values()) {
     if (t.category === 'portal') placedByAsset[t.assetKey] = t;
@@ -49,25 +83,31 @@ export function ensurePortalPairs(
     if (!pairAsset || placedByAsset[pairAsset]) continue;
 
     const current = placedByAsset[placedAsset];
+    if (!current) continue;
+
     let replacementTarget: PlacedTile | null = null;
     for (const candidate of tiles.values()) {
-      if (candidate.shape === 'start' || candidate.shape === 'end') continue;
-      if (candidate.category !== 'normal' && candidate.category !== 'curve') continue;
+      if (candidate.shape !== 'straight') continue;
+      if (candidate.category !== 'normal') continue;
       if (candidate.assetKey === pairAsset) continue;
-      const dist = Math.abs(candidate.x - current.x) + Math.abs(candidate.y - current.y);
-      if (dist >= 6 && dist <= 20) {
-        replacementTarget = candidate;
-        break;
-      }
+
+      const stepDist = Math.abs(candidate.pathStep - current.pathStep);
+      if (stepDist < 8) continue;
+
+      const manDist = Math.abs(candidate.x - current.x) + Math.abs(candidate.y - current.y);
+      if (manDist < 4) continue;
+
+      const tooCloseToFinal = endTiles.some(ec => {
+        const dMan = Math.abs(candidate.x - ec.x) + Math.abs(candidate.y - ec.y);
+        const dStep = Math.abs(candidate.pathStep - ec.pathStep);
+        return dMan < 2 || dStep < 6;
+      });
+      if (tooCloseToFinal) continue;
+
+      replacementTarget = candidate;
+      break;
     }
-    if (!replacementTarget) {
-      for (const candidate of tiles.values()) {
-        if (candidate.shape === 'start' || candidate.shape === 'end') continue;
-        if (candidate.category !== 'normal' && candidate.category !== 'curve') continue;
-        replacementTarget = candidate;
-        break;
-      }
-    }
+
     if (replacementTarget && remaining('portal') > 0) {
       const keyToReplace = `${replacementTarget.x},${replacementTarget.y}`;
       const oldCat = replacementTarget.category;
@@ -101,11 +141,7 @@ export function ensurePortalPairs(
       }
 
       if (replacementTileMeta) {
-        const newTile: PlacedTile = {
-          ...replacementTileMeta,
-          color: 'neutral',
-        };
-        tiles.set(keyToReplace, newTile);
+        tiles.set(keyToReplace, replacementTileMeta);
         usage[oldCat] = Math.max(0, usage[oldCat] - 1);
         const oldColor = replacementTarget.color;
         if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
@@ -115,7 +151,99 @@ export function ensurePortalPairs(
           );
         }
         usage.portal++;
-        placedByAsset[pairAsset] = newTile;
+        placedByAsset[pairAsset] = replacementTileMeta;
+      } else {
+        revertPortalToNormal(current, usage, colorUsage);
+        delete placedByAsset[placedAsset];
+      }
+    } else {
+      revertPortalToNormal(current, usage, colorUsage);
+      delete placedByAsset[placedAsset];
+    }
+  }
+
+  // Si no se colocó ningún inodoro en la fase procedural pero la dificultad los permite (ej. Moderada con maxPortals=2),
+  // intentamos colocar activamente una pareja completa que cumpla al 100% las reglas
+  if (Object.keys(placedByAsset).length === 0 && allowedSet.has('portal') && remaining('portal') >= 2) {
+    const candidates = Array.from(tiles.values()).filter(t =>
+      t.shape === 'straight' &&
+      t.category === 'normal' &&
+      t.pathStep >= 2 &&
+      endTiles.every(ec => {
+        const sDist = Math.abs(t.pathStep - ec.pathStep);
+        const mDist = Math.abs(t.x - ec.x) + Math.abs(t.y - ec.y);
+        return sDist >= 6 && mDist >= 2;
+      })
+    ).sort((a, b) => a.pathStep - b.pathStep);
+
+    let pairFound: [PlacedTile, PlacedTile] | null = null;
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (Math.abs(candidates[i].pathStep - candidates[j].pathStep) >= 8) {
+          pairFound = [candidates[i], candidates[j]];
+          break;
+        }
+      }
+      if (pairFound) break;
+    }
+
+    if (pairFound) {
+      const fam: PortalFamily = (pairFound[0].pathStep % 2 === 0) ? 'blanco' : 'azul';
+      const pairKeys = PORTAL_PAIR_MEMBER[fam];
+      for (let idx = 0; idx < 2; idx++) {
+        const target = pairFound[idx];
+        const assetKey = pairKeys[idx];
+        const keyToReplace = `${target.x},${target.y}`;
+        const oldCat = target.category;
+        const oldColor = target.color;
+        const shapeForPortal = target.shape;
+        const newConnectors: Direction[] = Array.from(target.connectors);
+        const baseConnectors = BASE_CONNECTORS[shapeForPortal] ?? BASE_CONNECTORS.straight;
+        const rotation = findRotationToMatch(baseConnectors, newConnectors);
+
+        const newTile: PlacedTile = {
+          id: `portal-pair-${keyToReplace}`,
+          category: 'portal',
+          color: 'neutral',
+          shape: shapeForPortal,
+          connectors:
+            rotation !== null
+              ? rotateConnectors(baseConnectors, rotation)
+              : newConnectors,
+          rotation: rotation ?? 0,
+          assetKey,
+          special: true,
+          isNeutral: true,
+          x: target.x,
+          y: target.y,
+          pathStep: target.pathStep,
+          branchId: target.branchId,
+          parentStep: target.parentStep,
+        };
+
+        tiles.set(keyToReplace, newTile);
+        usage[oldCat] = Math.max(0, usage[oldCat] - 1);
+        if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+          colorUsage[oldCat][oldColor as ColorName] = Math.max(
+            0,
+            colorUsage[oldCat][oldColor as ColorName] - 1
+          );
+        }
+        usage.portal++;
+        placedByAsset[assetKey] = newTile;
+      }
+    }
+  }
+
+  // Safety sweep: NUNCA dejar un portal huérfano
+  for (const t of Array.from(tiles.values())) {
+    if (t.category === 'portal') {
+      const pairAsset = PORTAL_PAIRS[t.assetKey];
+      const hasPair = Array.from(tiles.values()).some(
+        other => other.category === 'portal' && other.assetKey === pairAsset
+      );
+      if (!hasPair) {
+        revertPortalToNormal(t, usage, colorUsage);
       }
     }
   }

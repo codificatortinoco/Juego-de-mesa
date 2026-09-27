@@ -35,7 +35,7 @@ export function GeneratorControls(props: GeneratorControlsProps) {
 
   const difficulties: { value: Difficulty; label: string; hint: string }[] = [
     { value: 'tranquila', label: 'Tranquila', hint: 'Estrellas e izquierda/derecha' },
-    { value: 'moderada', label: 'Moderada', hint: 'Intersecciones, cárceles y tragamonedas' },
+    { value: 'moderada', label: 'Loca', hint: 'Intersecciones, bifurcaciones, cárceles, inodoros y tragamonedas' },
   ];
 
   return (

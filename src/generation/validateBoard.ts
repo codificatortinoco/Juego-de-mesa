@@ -61,6 +61,7 @@ export interface ValidateBoardOptions {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  maxPortals?: number;
 }
 
 function coord(x: number, y: number): string {
@@ -467,6 +468,7 @@ function validateGeometryAndInventory(
 function validateSpringsAndPortals(
   tiles: Map<string, PlacedTile>,
   endTiles: PlacedTile[],
+  opts: ValidateBoardOptions,
   errors: string[],
   warnings: string[]
 ): void {
@@ -517,8 +519,8 @@ function validateSpringsAndPortals(
   }
 
   // Portales
-  const PORTAL_MIN_FINAL_MANHATTAN = 7;
-  const PORTAL_MIN_SEP_STEPS = 6;
+  const PORTAL_MIN_FINAL_DIST = 6;
+  const PORTAL_MIN_SEP_STEPS = 8;
   const portalsByFamily: Record<
     PortalFamily,
     { step: number; x: number; y: number; assetKey: string }[]
@@ -537,24 +539,50 @@ function validateSpringsAndPortals(
   }
 
   const totalPortals = portalsByFamily.blanco.length + portalsByFamily.azul.length;
-  if (totalPortals > 0 && totalPortals !== 2 && totalPortals !== 4) {
+  if (totalPortals === 1) {
+    errors.push('Portales: no puede haber un solo inodoro en la carrera (hay 1).');
+  } else if (totalPortals > 0 && totalPortals !== 2 && totalPortals !== 4) {
     errors.push(`Portales: deben ser 0, 2 o 4. Hay ${totalPortals}.`);
   }
+
+  if (opts.maxPortals != null && totalPortals > opts.maxPortals) {
+    errors.push(`Portales: hay ${totalPortals} en el tablero, máximo permitido = ${opts.maxPortals}.`);
+  }
+
+  // En moderada (maxPortals = 2), las 2 losetas deben ser de la misma familia/color (blanco o azul)
+  if (opts.maxPortals === 2 && portalsByFamily.blanco.length > 0 && portalsByFamily.azul.length > 0) {
+    errors.push('Portales: en moderada los dos inodoros deben ser del mismo color (blanco o azul).');
+  }
+
   for (const fam of ['blanco', 'azul'] as PortalFamily[]) {
     const arr = portalsByFamily[fam];
     if (arr.length === 1) {
       errors.push(
-        `Portal familia ${fam}: pareja incompleta. Hay 1, deben ser 0 o 2 (${arr[0].assetKey}).`
+        `Portal familia ${fam}: pareja incompleta. No puede haber un solo inodoro en la carrera (hay 1: ${arr[0].assetKey}).`
       );
     } else if (arr.length > 2) {
       errors.push(`Portal familia ${fam}: inventario excedido. Hay ${arr.length}, máximo 2.`);
+    } else if (arr.length === 2) {
+      const sep = Math.abs(arr[0].step - arr[1].step);
+      if (sep < PORTAL_MIN_SEP_STEPS) {
+        errors.push(
+          `Portales familia ${fam}: separación entre los dos inodoros = ${sep} pasos. Mínimo requerido = ${PORTAL_MIN_SEP_STEPS}.`
+        );
+      }
     }
+
     for (const p of arr) {
       for (const ec of endTiles) {
-        const manhattan = Math.abs(p.x - ec.x) + Math.abs(p.y - ec.y);
-        if (manhattan < PORTAL_MIN_FINAL_MANHATTAN) {
+        const stepDist = Math.abs(p.step - ec.pathStep);
+        if (stepDist < PORTAL_MIN_FINAL_DIST) {
           errors.push(
-            `Portal ${p.assetKey} en (${p.x},${p.y}): distancia Manhattan a Final = ${manhattan}, mínimo requerido = ${PORTAL_MIN_FINAL_MANHATTAN}.`
+            `Portal ${p.assetKey} en (${p.x},${p.y}): distancia en pasos a Final = ${stepDist}, mínimo requerido = ${PORTAL_MIN_FINAL_DIST}.`
+          );
+        }
+        const manhattan = Math.abs(p.x - ec.x) + Math.abs(p.y - ec.y);
+        if (manhattan < 2) {
+          errors.push(
+            `Portal ${p.assetKey} en (${p.x},${p.y}): adyacente o superpuesto a Final (Manhattan = ${manhattan}).`
           );
         }
       }
@@ -574,9 +602,9 @@ function validateSpringsAndPortals(
       Math.abs(minBlanco - minAzul),
       Math.abs(maxBlanco - maxAzul)
     );
-    if (sep < PORTAL_MIN_SEP_STEPS) {
+    if (sep < 6) {
       errors.push(
-        `Portales: separación entre grupos Blanco y Azul = ${sep} steps. Mínimo requerido = ${PORTAL_MIN_SEP_STEPS}.`
+        `Portales: separación entre grupos Blanco y Azul = ${sep} steps. Mínimo requerido = 6.`
       );
     }
   }
@@ -850,7 +878,7 @@ export function validateBoard(
   validateGeometryAndInventory(tiles, usage, errors);
 
   // 7. Springs and portals rules
-  validateSpringsAndPortals(tiles, endTiles, errors, warnings);
+  validateSpringsAndPortals(tiles, endTiles, opts, errors, warnings);
 
   // 8. Path lengths and route balancing
   let stats = {

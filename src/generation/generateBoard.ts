@@ -64,6 +64,8 @@ export interface DifficultyConfig {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  maxPortals?: number;
+  portalSpawnRate?: number;
 }
 
 export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
@@ -85,6 +87,7 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     minCajaMagica: 1,
     maxCajaMagica: 3,
     maxTragaMonedas: 1,
+    maxPortals: 0,
   },
   moderada: {
     key: 'moderada',
@@ -97,13 +100,15 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     desvioBudget: 3,
     intersectionProbability: 0.27,
     turnProbability: 0.32,
-    allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'desvio', 'carcel', 'cajaMagica', 'tragaMonedas'],
+    allowedCategories: ['normal', 'curve', 'inicio', 'final', 'puntos', 'avanzar', 'retroceder', 'desvio', 'carcel', 'cajaMagica', 'tragaMonedas', 'portal'],
     only1StarPuntos: false,
     puntosDensity: 0.16,
     allow4WayIntersection: false,
     minCajaMagica: 0,
     maxCajaMagica: 3,
     maxTragaMonedas: 2,
+    maxPortals: 2,
+    portalSpawnRate: 0.48,
   },
   loca: {
     key: 'loca',
@@ -120,6 +125,7 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     only1StarPuntos: false,
     puntosDensity: 0.12,
     allow4WayIntersection: true,
+    maxPortals: 4,
   },
 };
 
@@ -128,7 +134,8 @@ function tryOnce(
   attemptBase: number,
   relaxSeparation: boolean,
   difficulty: Difficulty,
-  wantsIntersections?: boolean
+  wantsIntersections?: boolean,
+  wantsPortals?: boolean
 ): {
   path: PathResult;
   colors: Map<string, ColorAssignment>;
@@ -147,6 +154,13 @@ function tryOnce(
       cfg.desvioBudget = 0;
       cfg.intersectionProbability = 0;
       cfg.minBranchLength = 20;
+    }
+
+    // REGLA USUARIO: En moderada, los inodoros deben aparecer ~50% de las veces
+    const withPortals = wantsPortals ?? rng.chance(0.53);
+    if (!withPortals) {
+      cfg.maxPortals = 0;
+      cfg.allowedCategories = cfg.allowedCategories.filter(c => c !== 'portal');
     }
   }
 
@@ -186,6 +200,8 @@ function tryOnce(
     minCajaMagica: cfg.minCajaMagica,
     maxCajaMagica: cfg.maxCajaMagica,
     maxTragaMonedas: cfg.maxTragaMonedas,
+    maxPortals: cfg.maxPortals,
+    portalSpawnRate: cfg.portalSpawnRate,
     desiredFinals: cfg.desiredFinals,
     minBranchLength: cfg.minBranchLength,
   });
@@ -197,12 +213,13 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   const cfg = DIFFICULTY_CONFIGS[difficulty];
   const seedRng = createSeededRandom(seed);
   const moderadaWantsIntersections = difficulty === 'moderada' ? seedRng.chance(0.55) : true;
+  const moderadaWantsPortals = difficulty === 'moderada' ? seedRng.chance(0.53) : true;
 
   const relaxed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + attempt * 31);
     const tryRelax = relaxed && attempt > MAX_ATTEMPTS * 0.6;
-    const result = tryOnce(rng, attempt, tryRelax, difficulty, moderadaWantsIntersections);
+    const result = tryOnce(rng, attempt, tryRelax, difficulty, moderadaWantsIntersections, moderadaWantsPortals);
     if (!result) continue;
 
     const { path, colors, tileAssign, effectiveCfg } = result;
@@ -224,6 +241,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         minCajaMagica: effectiveCfg.minCajaMagica,
         maxCajaMagica: effectiveCfg.maxCajaMagica,
         maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+        maxPortals: effectiveCfg.maxPortals,
       }
     );
 
@@ -266,7 +284,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 99991 + attempt * 37);
-    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty, moderadaWantsIntersections);
+    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty, moderadaWantsIntersections, moderadaWantsPortals);
     if (!result) continue;
     const { path, colors, tileAssign, effectiveCfg } = result;
 
@@ -287,6 +305,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         minCajaMagica: effectiveCfg.minCajaMagica,
         maxCajaMagica: effectiveCfg.maxCajaMagica,
         maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+        maxPortals: effectiveCfg.maxPortals,
       }
     );
 
@@ -297,7 +316,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
           !e.includes('separación') &&
           !e.includes('longitudes de ruta diferentes') &&
           !e.includes('distancia de pareja') &&
-          !e.includes('pareja incompleta')
+          (!e.includes('pareja incompleta') || e.includes('Portal')) &&
+          !e.includes('un solo inodoro')
       ),
       ...colorPatternErrors.filter(
         (e) =>
@@ -368,7 +388,10 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         e.startsWith('Máximo 4 Finales') ||
         e.includes('Final en (') ||
         e.includes('Conexión abierta inválida') ||
-        e.includes('Conexión no recíproca')
+        e.includes('Conexión no recíproca') ||
+        e.includes('Portales') ||
+        e.includes('Portal') ||
+        e.includes('inodoro')
       ) {
         hard.push(e);
       }
@@ -400,7 +423,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   for (let attempt = 0; attempt < EXTRA_FALLBACK_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 777777 + attempt * 53);
     const useIntersections = (difficulty === 'moderada' && attempt >= 20) ? false : moderadaWantsIntersections;
-    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty, useIntersections);
+    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty, useIntersections, moderadaWantsPortals);
     if (!tryIt) continue;
     const { path, colors, tileAssign, effectiveCfg } = tryIt;
     const val = validateBoard(tileAssign.tiles, path, colors, tileAssign.usage, {
@@ -410,6 +433,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       minCajaMagica: effectiveCfg.minCajaMagica,
       maxCajaMagica: effectiveCfg.maxCajaMagica,
       maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+      maxPortals: effectiveCfg.maxPortals,
     });
     const hard = extractHardErrors(val, tileAssign.tiles);
     const cand: Candidate = {
@@ -485,25 +509,32 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     allow4WayIntersection: cfg.allow4WayIntersection,
   });
   const lastColors = assignColorsToPath(lastFb, lastRng.range(0, 3));
+  const effectiveCfg = { ...cfg };
+  if (difficulty === 'moderada' && !moderadaWantsPortals) {
+    effectiveCfg.maxPortals = 0;
+    effectiveCfg.allowedCategories = effectiveCfg.allowedCategories.filter(c => c !== 'portal');
+  }
   const lastTiles = assignTilesToPath(lastFb, lastColors, lastRng, {
     relaxSeparation: true,
-    allowedCategories: cfg.allowedCategories,
-    only1StarPuntos: cfg.only1StarPuntos,
-    puntosDensity: cfg.puntosDensity,
-    allow4WayIntersection: cfg.allow4WayIntersection,
-    minCajaMagica: cfg.minCajaMagica,
-    maxCajaMagica: cfg.maxCajaMagica,
-    maxTragaMonedas: cfg.maxTragaMonedas,
-    desiredFinals: cfg.desiredFinals,
-    minBranchLength: cfg.minBranchLength,
+    allowedCategories: effectiveCfg.allowedCategories,
+    only1StarPuntos: effectiveCfg.only1StarPuntos,
+    puntosDensity: effectiveCfg.puntosDensity,
+    allow4WayIntersection: effectiveCfg.allow4WayIntersection,
+    minCajaMagica: effectiveCfg.minCajaMagica,
+    maxCajaMagica: effectiveCfg.maxCajaMagica,
+    maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+    maxPortals: effectiveCfg.maxPortals,
+    desiredFinals: effectiveCfg.desiredFinals,
+    minBranchLength: effectiveCfg.minBranchLength,
   });
   const lastVal = validateBoard(lastTiles.tiles, lastFb, lastColors, lastTiles.usage, {
     relaxedFinalLength: true,
-    desiredFinals: cfg.desiredFinals,
-    minFinalLength: cfg.minBranchLength,
-    minCajaMagica: cfg.minCajaMagica,
-    maxCajaMagica: cfg.maxCajaMagica,
-    maxTragaMonedas: cfg.maxTragaMonedas,
+    desiredFinals: effectiveCfg.desiredFinals,
+    minFinalLength: effectiveCfg.minBranchLength,
+    minCajaMagica: effectiveCfg.minCajaMagica,
+    maxCajaMagica: effectiveCfg.maxCajaMagica,
+    maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+    maxPortals: effectiveCfg.maxPortals,
   });
   console.error('[generateBoard] Último fallback (sin candidatos).');
   return {
