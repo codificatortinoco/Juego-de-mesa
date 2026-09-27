@@ -61,6 +61,8 @@ export interface ValidateBoardOptions {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  minCarcel?: number;
+  maxCarcel?: number;
   maxPortals?: number;
 }
 
@@ -104,6 +106,7 @@ function validateBoxesAndSlots(
 ): void {
   const cajaMagicaTiles = Array.from(tiles.values()).filter((t) => t.category === 'cajaMagica');
   const tragaMonedasTiles = Array.from(tiles.values()).filter((t) => t.category === 'tragaMonedas');
+  const carcelTiles = Array.from(tiles.values()).filter((t) => t.category === 'carcel');
 
   if (typeof opts.minCajaMagica === 'number' && cajaMagicaTiles.length < opts.minCajaMagica) {
     errors.push(
@@ -118,14 +121,24 @@ function validateBoxesAndSlots(
       `Máximo de Tragamonedas: ${opts.maxTragaMonedas}, hay ${tragaMonedasTiles.length}. En Tranquila son opcionales (de vez en cuando), nunca más de 1.`
     );
   }
+  if (typeof opts.minCarcel === 'number' && carcelTiles.length < opts.minCarcel) {
+    errors.push(
+      `Mínimo de Cárceles: ${opts.minCarcel}, hay ${carcelTiles.length}.`
+    );
+  }
+  if (typeof opts.maxCarcel === 'number' && carcelTiles.length > opts.maxCarcel) {
+    errors.push(
+      `Máximo de Cárceles: ${opts.maxCarcel}, hay ${carcelTiles.length}.`
+    );
+  }
 
-  for (const t of [...cajaMagicaTiles, ...tragaMonedasTiles]) {
+  for (const t of [...cajaMagicaTiles, ...tragaMonedasTiles, ...carcelTiles]) {
     if (t.color === 'neutral') continue;
     const expectedIdx = Math.max(0, Math.floor(t.pathStep ?? 0)) % 4;
     const expectedColor = COLOR_CYCLE[expectedIdx];
     if (t.color !== expectedColor) {
       errors.push(
-        `${t.category === 'cajaMagica' ? 'Caja Mágica' : 'Tragamonedas'} en (${t.x},${t.y}) step=${t.pathStep} viola patrón cromático: ${t.color} esperado ${expectedColor}.`
+        `${t.category === 'cajaMagica' ? 'Caja Mágica' : t.category === 'tragaMonedas' ? 'Tragamonedas' : 'Cárcel'} en (${t.x},${t.y}) step=${t.pathStep} viola patrón cromático: ${t.color} esperado ${expectedColor}.`
       );
     }
   }

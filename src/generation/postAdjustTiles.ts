@@ -26,6 +26,8 @@ export interface PostAdjustOptions {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  minCarcel?: number;
+  maxCarcel?: number;
 }
 
 function revertPortalToNormal(
@@ -411,12 +413,15 @@ export function balanceCajasAndTragamonedas(
   const minC = allowedSet.has('cajaMagica') ? options.minCajaMagica : undefined;
   const maxC = allowedSet.has('cajaMagica') ? options.maxCajaMagica : undefined;
   const maxT = allowedSet.has('tragaMonedas') ? options.maxTragaMonedas : undefined;
+  const minK = allowedSet.has('carcel') ? options.minCarcel : undefined;
+  const maxK = allowedSet.has('carcel') ? options.maxCarcel : undefined;
 
   const countBy = (cat: TileCategory) =>
     Array.from(tiles.values()).filter((t) => t.category === cat).length;
 
   let cMagica = countBy('cajaMagica');
   let tMonedas = countBy('tragaMonedas');
+  let cCarcel = countBy('carcel');
 
   function tryDegrade(target: PlacedTile): PlacedTile | null {
     const step = target.pathStep ?? 0;
@@ -748,6 +753,135 @@ export function balanceCajasAndTragamonedas(
         }
         tMonedas--;
       }
+    }
+  }
+
+  // Degradar cárceles si no están permitidas o maxCarcel === 0
+  if (!allowedSet.has('carcel') || maxK === 0) {
+    const allC = Array.from(tiles.values()).filter((t) => t.category === 'carcel');
+    for (const target of allC) {
+      const k = `${target.x},${target.y}`;
+      const replacement = tryDegrade(target);
+      if (replacement) {
+        const oldColor = target.color;
+        usage.carcel = Math.max(0, usage.carcel - 1);
+        if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+          colorUsage.carcel[oldColor as ColorName] = Math.max(
+            0,
+            colorUsage.carcel[oldColor as ColorName] - 1
+          );
+        }
+        const next: PlacedTile = {
+          ...replacement,
+          x: target.x,
+          y: target.y,
+          pathStep: target.pathStep,
+          branchId: target.branchId,
+          parentStep: target.parentStep,
+        };
+        tiles.set(k, next);
+        usage[next.category] = (usage[next.category] ?? 0) + 1;
+        if (COLOR_KEYS.includes(next.color as ColorName)) {
+          colorUsage[next.category][next.color as ColorName] =
+            (colorUsage[next.category][next.color as ColorName] ?? 0) + 1;
+        }
+        cCarcel--;
+      }
+    }
+  }
+
+  // Degradar sobrantes de cárcel si hay un máximo configurado
+  if (typeof maxK === 'number' && cCarcel > maxK) {
+    const ordered = Array.from(tiles.values())
+      .filter((t) => t.category === 'carcel')
+      .sort((a, b) => (a.pathStep ?? 0) - (b.pathStep ?? 0));
+    for (let i = maxK; i < ordered.length; i++) {
+      const target = ordered[i];
+      const k = `${target.x},${target.y}`;
+      const replacement = tryDegrade(target);
+      if (replacement) {
+        const oldColor = target.color;
+        usage.carcel = Math.max(0, usage.carcel - 1);
+        if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+          colorUsage.carcel[oldColor as ColorName] = Math.max(
+            0,
+            colorUsage.carcel[oldColor as ColorName] - 1
+          );
+        }
+        const next: PlacedTile = {
+          ...replacement,
+          x: target.x,
+          y: target.y,
+          pathStep: target.pathStep,
+          branchId: target.branchId,
+          parentStep: target.parentStep,
+        };
+        tiles.set(k, next);
+        usage[next.category] = (usage[next.category] ?? 0) + 1;
+        if (COLOR_KEYS.includes(next.color as ColorName)) {
+          colorUsage[next.category][next.color as ColorName] =
+            (colorUsage[next.category][next.color as ColorName] ?? 0) + 1;
+        }
+        cCarcel--;
+      }
+    }
+  }
+
+  // Forzar mínimo de cárcel (ej. en Tranquila cuando se activa el 25%)
+  if (typeof minK === 'number' && cCarcel < minK && allowedSet.has('carcel')) {
+    const candidates = Array.from(tiles.values())
+      .filter((t) => {
+        if (t.shape === 'start' || t.shape === 'end') return false;
+        if (t.shape === 'intersection3' || t.shape === 'intersection4') return false;
+        if (t.category === 'inicio' || t.category === 'final' || t.category === 'desvio') return false;
+        if (t.category === 'cajaMagica' || t.category === 'tragaMonedas' || t.category === 'carcel' || t.category === 'portal') return false;
+        if (t.color === 'neutral') return false;
+        const step = t.pathStep ?? 0;
+        const expectedColor = COLOR_CYCLE[Math.max(0, step) % 4] as ColorName;
+        if (t.color !== expectedColor) return false;
+        const req: Direction[] = Array.from(t.connectors);
+        return isStraightCell(req);
+      })
+      .sort((a, b) => Math.abs((a.pathStep ?? 12) - 12) - Math.abs((b.pathStep ?? 12) - 12));
+
+    for (const cand of candidates) {
+      if (cCarcel >= minK) break;
+      if (remainingColor('carcel', cand.color as ColorName) <= 0) continue;
+      const req: Direction[] = Array.from(cand.connectors);
+      const replacement = createTileFromCategory(
+        'carcel',
+        cand.color as ColorName,
+        'straight',
+        req,
+        0,
+        false
+      ) as PlacedTile | null;
+      if (!replacement) continue;
+
+      const k = `${cand.x},${cand.y}`;
+      const oldCat = cand.category;
+      const oldColor = cand.color;
+      usage[oldCat] = Math.max(0, usage[oldCat] - 1);
+      if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+        colorUsage[oldCat][oldColor as ColorName] = Math.max(
+          0,
+          colorUsage[oldCat][oldColor as ColorName] - 1
+        );
+      }
+      const next: PlacedTile = {
+        ...replacement,
+        x: cand.x,
+        y: cand.y,
+        pathStep: cand.pathStep,
+        branchId: cand.branchId,
+        parentStep: cand.parentStep,
+      };
+      tiles.set(k, next);
+      usage.carcel++;
+      if (oldColor !== 'neutral' && COLOR_KEYS.includes(oldColor as ColorName)) {
+        colorUsage.carcel[oldColor as ColorName]++;
+      }
+      cCarcel++;
     }
   }
 }

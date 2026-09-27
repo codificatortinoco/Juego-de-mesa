@@ -56,6 +56,8 @@ interface AssignOptions {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  minCarcel?: number;
+  maxCarcel?: number;
   maxPortals?: number;
   portalSpawnRate?: number;
   desiredFinals?: number;
@@ -891,6 +893,15 @@ export function assignTilesToPath(
         }
       }
     }
+    if (category === 'carcel' && typeof options.maxCarcel === 'number') {
+      const currentK = usage.carcel ?? 0;
+      if (currentK >= options.maxCarcel) {
+        category = allowedSet.has('normal') ? 'normal' : category;
+        if (category === 'normal') {
+          willBe2Estrellas = false;
+        }
+      }
+    }
 
     // REGLA DURA:
     // - curve (cambio dirección) → SIEMPRE category='curve' (sin excepciones)
@@ -974,9 +985,10 @@ export function assignTilesToPath(
       // ADEMÁS: respetar maxCajaMagica/maxTragaMonedas si están definidos.
       const allAltCats: TileCategory[] = (['normal', 'curve', 'puntos', 'carcel', 'tragaMonedas', 'cajaMagica'] as TileCategory[]);
       const altCats = allAltCats.filter(c => allowedSet.has(c) && remaining(c) > 0 &&
-        !(needsCurve && (c === 'cajaMagica' || c === 'tragaMonedas')) &&
+        !(needsCurve && (c === 'cajaMagica' || c === 'tragaMonedas' || c === 'carcel')) &&
         !(c === 'cajaMagica' && typeof options.maxCajaMagica === 'number' && (usage.cajaMagica ?? 0) >= options.maxCajaMagica) &&
-        !(c === 'tragaMonedas' && typeof options.maxTragaMonedas === 'number' && (usage.tragaMonedas ?? 0) >= options.maxTragaMonedas)
+        !(c === 'tragaMonedas' && typeof options.maxTragaMonedas === 'number' && (usage.tragaMonedas ?? 0) >= options.maxTragaMonedas) &&
+        !(c === 'carcel' && typeof options.maxCarcel === 'number' && (usage.carcel ?? 0) >= options.maxCarcel)
       );
       for (const ac of altCats) {
         const tryShapes: TileShape[] = needsCurve ? ['curve'] : ['straight'];

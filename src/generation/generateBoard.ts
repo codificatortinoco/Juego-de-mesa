@@ -64,6 +64,8 @@ export interface DifficultyConfig {
   minCajaMagica?: number;
   maxCajaMagica?: number;
   maxTragaMonedas?: number;
+  minCarcel?: number;
+  maxCarcel?: number;
   maxPortals?: number;
   portalSpawnRate?: number;
 }
@@ -87,6 +89,8 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     minCajaMagica: 1,
     maxCajaMagica: 3,
     maxTragaMonedas: 1,
+    minCarcel: 0,
+    maxCarcel: 0,
     maxPortals: 0,
   },
   moderada: {
@@ -107,6 +111,8 @@ export const DIFFICULTY_CONFIGS: Record<Difficulty, DifficultyConfig> = {
     minCajaMagica: 0,
     maxCajaMagica: 3,
     maxTragaMonedas: 2,
+    minCarcel: 0,
+    maxCarcel: 4,
     maxPortals: 2,
     portalSpawnRate: 0.48,
   },
@@ -135,7 +141,8 @@ function tryOnce(
   relaxSeparation: boolean,
   difficulty: Difficulty,
   wantsIntersections?: boolean,
-  wantsPortals?: boolean
+  wantsPortals?: boolean,
+  wantsCarcel?: boolean
 ): {
   path: PathResult;
   colors: Map<string, ColorAssignment>;
@@ -143,6 +150,22 @@ function tryOnce(
   effectiveCfg: DifficultyConfig;
 } | null {
   const cfg: DifficultyConfig = { ...DIFFICULTY_CONFIGS[difficulty] };
+
+  if (difficulty === 'tranquila') {
+    // REGLA USUARIO: En tranquila, las cárceles aparecen un 25% de las veces
+    const withCarcel = wantsCarcel ?? rng.chance(0.25);
+    if (withCarcel) {
+      if (!cfg.allowedCategories.includes('carcel')) {
+        cfg.allowedCategories = [...cfg.allowedCategories, 'carcel'];
+      }
+      cfg.minCarcel = 1;
+      cfg.maxCarcel = 1;
+    } else {
+      cfg.allowedCategories = cfg.allowedCategories.filter(c => c !== 'carcel');
+      cfg.minCarcel = 0;
+      cfg.maxCarcel = 0;
+    }
+  }
 
   if (difficulty === 'moderada') {
     // REGLA USUARIO: En moderado, no siempre deben de haber intersecciones.
@@ -200,6 +223,8 @@ function tryOnce(
     minCajaMagica: cfg.minCajaMagica,
     maxCajaMagica: cfg.maxCajaMagica,
     maxTragaMonedas: cfg.maxTragaMonedas,
+    minCarcel: cfg.minCarcel,
+    maxCarcel: cfg.maxCarcel,
     maxPortals: cfg.maxPortals,
     portalSpawnRate: cfg.portalSpawnRate,
     desiredFinals: cfg.desiredFinals,
@@ -214,12 +239,13 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   const seedRng = createSeededRandom(seed);
   const moderadaWantsIntersections = difficulty === 'moderada' ? seedRng.chance(0.55) : true;
   const moderadaWantsPortals = difficulty === 'moderada' ? seedRng.chance(0.53) : true;
+  const tranquilaWantsCarcel = difficulty === 'tranquila' ? seedRng.chance(0.25) : false;
 
   const relaxed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + attempt * 31);
     const tryRelax = relaxed && attempt > MAX_ATTEMPTS * 0.6;
-    const result = tryOnce(rng, attempt, tryRelax, difficulty, moderadaWantsIntersections, moderadaWantsPortals);
+    const result = tryOnce(rng, attempt, tryRelax, difficulty, moderadaWantsIntersections, moderadaWantsPortals, tranquilaWantsCarcel);
     if (!result) continue;
 
     const { path, colors, tileAssign, effectiveCfg } = result;
@@ -241,6 +267,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         minCajaMagica: effectiveCfg.minCajaMagica,
         maxCajaMagica: effectiveCfg.maxCajaMagica,
         maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+        minCarcel: effectiveCfg.minCarcel,
+        maxCarcel: effectiveCfg.maxCarcel,
         maxPortals: effectiveCfg.maxPortals,
       }
     );
@@ -284,7 +312,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 99991 + attempt * 37);
-    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty, moderadaWantsIntersections, moderadaWantsPortals);
+    const result = tryOnce(rng, MAX_ATTEMPTS + attempt, true, difficulty, moderadaWantsIntersections, moderadaWantsPortals, tranquilaWantsCarcel);
     if (!result) continue;
     const { path, colors, tileAssign, effectiveCfg } = result;
 
@@ -305,6 +333,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
         minCajaMagica: effectiveCfg.minCajaMagica,
         maxCajaMagica: effectiveCfg.maxCajaMagica,
         maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+        minCarcel: effectiveCfg.minCarcel,
+        maxCarcel: effectiveCfg.maxCarcel,
         maxPortals: effectiveCfg.maxPortals,
       }
     );
@@ -423,7 +453,7 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   for (let attempt = 0; attempt < EXTRA_FALLBACK_ATTEMPTS; attempt++) {
     const rng = createSeededRandom(seed + 777777 + attempt * 53);
     const useIntersections = (difficulty === 'moderada' && attempt >= 20) ? false : moderadaWantsIntersections;
-    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty, useIntersections, moderadaWantsPortals);
+    const tryIt = tryOnce(rng, MAX_ATTEMPTS * 3 + attempt, true, difficulty, useIntersections, moderadaWantsPortals, tranquilaWantsCarcel);
     if (!tryIt) continue;
     const { path, colors, tileAssign, effectiveCfg } = tryIt;
     const val = validateBoard(tileAssign.tiles, path, colors, tileAssign.usage, {
@@ -433,6 +463,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
       minCajaMagica: effectiveCfg.minCajaMagica,
       maxCajaMagica: effectiveCfg.maxCajaMagica,
       maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+      minCarcel: effectiveCfg.minCarcel,
+      maxCarcel: effectiveCfg.maxCarcel,
       maxPortals: effectiveCfg.maxPortals,
     });
     const hard = extractHardErrors(val, tileAssign.tiles);
@@ -510,6 +542,19 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
   });
   const lastColors = assignColorsToPath(lastFb, lastRng.range(0, 3));
   const effectiveCfg = { ...cfg };
+  if (difficulty === 'tranquila') {
+    if (tranquilaWantsCarcel) {
+      if (!effectiveCfg.allowedCategories.includes('carcel')) {
+        effectiveCfg.allowedCategories = [...effectiveCfg.allowedCategories, 'carcel'];
+      }
+      effectiveCfg.minCarcel = 1;
+      effectiveCfg.maxCarcel = 1;
+    } else {
+      effectiveCfg.allowedCategories = effectiveCfg.allowedCategories.filter(c => c !== 'carcel');
+      effectiveCfg.minCarcel = 0;
+      effectiveCfg.maxCarcel = 0;
+    }
+  }
   if (difficulty === 'moderada' && !moderadaWantsPortals) {
     effectiveCfg.maxPortals = 0;
     effectiveCfg.allowedCategories = effectiveCfg.allowedCategories.filter(c => c !== 'portal');
@@ -523,6 +568,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     minCajaMagica: effectiveCfg.minCajaMagica,
     maxCajaMagica: effectiveCfg.maxCajaMagica,
     maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+    minCarcel: effectiveCfg.minCarcel,
+    maxCarcel: effectiveCfg.maxCarcel,
     maxPortals: effectiveCfg.maxPortals,
     desiredFinals: effectiveCfg.desiredFinals,
     minBranchLength: effectiveCfg.minBranchLength,
@@ -534,6 +581,8 @@ export function generateBoard(inputSeed?: Seed | string, difficulty: Difficulty 
     minCajaMagica: effectiveCfg.minCajaMagica,
     maxCajaMagica: effectiveCfg.maxCajaMagica,
     maxTragaMonedas: effectiveCfg.maxTragaMonedas,
+    minCarcel: effectiveCfg.minCarcel,
+    maxCarcel: effectiveCfg.maxCarcel,
     maxPortals: effectiveCfg.maxPortals,
   });
   console.error('[generateBoard] Último fallback (sin candidatos).');
