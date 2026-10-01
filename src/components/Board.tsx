@@ -167,6 +167,7 @@ export function Board({
 
   useEffect(() => {
     if (!isDragging) return;
+    document.body.classList.add('board-dragging');
     function move(e: MouseEvent) {
       setPan({
         x: dragStart.current.px + (e.clientX - dragStart.current.x),
@@ -174,7 +175,10 @@ export function Board({
       });
     }
     window.addEventListener('mousemove', move);
-    return () => window.removeEventListener('mousemove', move);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      document.body.classList.remove('board-dragging');
+    };
   }, [isDragging]);
 
   return (
@@ -208,16 +212,13 @@ export function Board({
 
       <div
         ref={viewportRef}
-        className="board-viewport compact"
+        className={`board-viewport compact ${isDragging ? 'is-dragging' : ''}`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onDoubleClick={handleFitAndCenter}
-        style={{
-          cursor: isDragging ? 'grabbing' : 'grab',
-        }}
       >
         <div
           className="board-stage"
