@@ -1228,7 +1228,7 @@ kbd {
 
 .cm-card-video {
   background: #000;
-  cursor: url('./assets/Pointer.cur'), url('./assets/Pointer.png') 13 1, pointer;
+  cursor: url('./assets/Arrow.cur'), url('./assets/Arrow.png') 1 1, default;
 }
 
 .cm-sound-overlay {

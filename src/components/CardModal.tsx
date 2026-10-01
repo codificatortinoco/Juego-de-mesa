@@ -44,14 +44,27 @@ export function CardModal({
   }, [open, onClose]);
 
   const handleUnlockSound = useCallback(() => {
-    setSoundBlocked(false);
     const v = videoRef.current;
-    if (v) {
-      v.muted = false;
-      v.currentTime = 0;
-      v.play().catch((err) => {
-        console.warn('Error al reproducir video con sonido:', err);
-      });
+    if (!v) {
+      setSoundBlocked(false);
+      return;
+    }
+    v.muted = false;
+    v.currentTime = 0;
+    const playPromise = v.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          setSoundBlocked(false);
+        })
+        .catch((err) => {
+          console.warn('Reintento con sonido falló:', err);
+          v.muted = true;
+          v.play().catch(() => {});
+          setSoundBlocked(false);
+        });
+    } else {
+      setSoundBlocked(false);
     }
   }, []);
 
@@ -84,7 +97,7 @@ export function CardModal({
   useEffect(() => {
     if (!open || !soundBlocked) return;
 
-    const onUserGesture = (e: MouseEvent | KeyboardEvent | TouchEvent) => {
+    const onUserGesture = (e: MouseEvent | KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest('.cm-close-x, .cm-btn-secondary')) {
         return;
@@ -92,11 +105,11 @@ export function CardModal({
       handleUnlockSound();
     };
 
-    window.addEventListener('pointerdown', onUserGesture, { capture: true, once: true });
+    window.addEventListener('click', onUserGesture, { capture: true, once: true });
     window.addEventListener('keydown', onUserGesture, { capture: true, once: true });
     return () => {
-      window.removeEventListener('pointerdown', onUserGesture);
-      window.removeEventListener('keydown', onUserGesture);
+      window.removeEventListener('click', onUserGesture, { capture: true });
+      window.removeEventListener('keydown', onUserGesture, { capture: true });
     };
   }, [open, soundBlocked, handleUnlockSound]);
 
@@ -134,11 +147,15 @@ export function CardModal({
                 preload="auto"
                 className="cm-card-image cm-card-video"
                 onEnded={onVideoEnd}
-                onClick={soundBlocked ? handleUnlockSound : onVideoEnd}
-                title={soundBlocked ? `Haz clic para ${soundPromptText.toLowerCase()}` : 'Click para saltar'}
               />
               {soundBlocked && (
-                <div className="cm-sound-overlay" onClick={handleUnlockSound}>
+                <div
+                  className="cm-sound-overlay"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleUnlockSound();
+                  }}
+                >
                   <button
                     type="button"
                     className="cm-sound-btn"
@@ -176,7 +193,14 @@ export function CardModal({
           <button
             type="button"
             className="cm-btn cm-btn-primary"
-            onClick={soundBlocked ? handleUnlockSound : onAnotherCard}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (soundBlocked) {
+                handleUnlockSound();
+              } else if (!videoSrc) {
+                onAnotherCard();
+              }
+            }}
             disabled={Boolean(videoSrc) && !soundBlocked}
           >
             {soundBlocked ? soundPromptText : videoSrc ? waitingButtonText : 'OTRA CARTA'}
