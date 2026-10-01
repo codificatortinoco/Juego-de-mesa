@@ -7,8 +7,8 @@ interface GeneratorControlsProps {
   generating: boolean;
   onGenerateNew: () => void;
   onApplySeed: (s: Seed) => void;
-  showDebug: boolean;
-  onToggleDebug: (v: boolean) => void;
+  showDebug?: boolean;
+  onToggleDebug?: (v: boolean) => void;
   difficulty: Difficulty;
   onChangeDifficulty: (d: Difficulty) => void;
 }
@@ -19,8 +19,6 @@ export function GeneratorControls(props: GeneratorControlsProps) {
     generating,
     onGenerateNew,
     onApplySeed,
-    showDebug,
-    onToggleDebug,
     difficulty,
     onChangeDifficulty,
   } = props;
@@ -39,7 +37,7 @@ export function GeneratorControls(props: GeneratorControlsProps) {
   ];
 
   return (
-    <div className="generator-controls">
+    <div className="generator-controls compact">
       <div className="controls-row">
         <div className="difficulty-group" role="radiogroup" aria-label="Dificultad">
           {difficulties.map((opt) => (
@@ -49,59 +47,55 @@ export function GeneratorControls(props: GeneratorControlsProps) {
               onClick={() => onChangeDifficulty(opt.value)}
               title={opt.hint}
               disabled={generating}
+              type="button"
             >
               {opt.label}
             </button>
           ))}
         </div>
-      </div>
 
-      <div className="controls-row">
-        <button className="primary" onClick={onGenerateNew} disabled={generating}>
-          {generating ? 'Generando…' : '🎲 Generar nuevo mapa'}
-        </button>
-      </div>
-
-      <div className="controls-row seed-row">
-        <label className="seed-label">
-          Seed:
-          <input
-            type="text"
-            value={seedInput}
-            onChange={(e) => setSeedInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const s = parseSeed(seedInput);
-                setSeedInput(String(s));
-                onApplySeed(s);
-              }
-            }}
-            className="seed-input"
-          />
-        </label>
         <button
-          className="seed-apply"
-          onClick={() => {
-            const s = parseSeed(seedInput);
-            setSeedInput(String(s));
-            onApplySeed(s);
-          }}
+          className="primary btn-generate-map"
+          onClick={onGenerateNew}
           disabled={generating}
+          type="button"
         >
-          Aplicar
+          {generating ? 'Generando…' : 'Generar nuevo mapa'}
         </button>
-      </div>
 
-      <div className="controls-row">
-        <label className="debug-toggle">
-          <input
-            type="checkbox"
-            checked={showDebug}
-            onChange={(e) => onToggleDebug(e.target.checked)}
-          />
-          <span>Mostrar debug</span>
-        </label>
+        <div className="seed-row">
+          <label className="seed-label">
+            Seed:
+            <input
+              type="text"
+              value={seedInput}
+              onChange={(e) => setSeedInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const s = parseSeed(seedInput);
+                  setSeedInput(String(s));
+                  onApplySeed(s);
+                }
+              }}
+              className="seed-input"
+            />
+          </label>
+          <button
+            className="seed-apply"
+            onClick={() => {
+              const s = parseSeed(seedInput);
+              setSeedInput(String(s));
+              onApplySeed(s);
+            }}
+            disabled={generating}
+            type="button"
+          >
+            Aplicar
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
+export default GeneratorControls;

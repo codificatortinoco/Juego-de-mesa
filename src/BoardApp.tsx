@@ -7,6 +7,7 @@ import {
   type Difficulty,
 } from './generation/generateBoard';
 import { generateRandomSeed, type Seed } from './generation/seededRandom';
+import { playCreateMapSound } from './utils/audio';
 import './App.css';
 
 export function BoardApp() {
@@ -25,6 +26,7 @@ export function BoardApp() {
   const [error, setError] = useState<string | null>(null);
 
   function runGeneration(s: Seed, diff: Difficulty = difficulty) {
+    playCreateMapSound();
     setGenerating(true);
     setError(null);
     try {

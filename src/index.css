@@ -21,6 +21,34 @@
 html, body {
   margin: 0;
   padding: 0;
+  cursor: url('./assets/Arrow.cur'), url('./assets/Arrow.png') 2 0, auto;
+}
+
+button,
+button *,
+[role="button"],
+[role="button"] *,
+a,
+a *,
+input,
+select,
+textarea,
+label,
+summary,
+.diff-btn,
+.diff-btn *,
+.card-page-draw-btn,
+.cm-btn,
+.cm-close-x,
+.debug-toggle,
+.debug-toggle * {
+  cursor: url('./assets/Pointer.cur'), url('./assets/Pointer.png') 13 1, pointer !important;
+}
+
+button:disabled,
+button:disabled *,
+input:disabled {
+  cursor: not-allowed !important;
 }
 
 body {

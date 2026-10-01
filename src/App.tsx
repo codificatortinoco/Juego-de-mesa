@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CajaPage } from './pages/CajaPage';
 import { TragamonedasPage } from './pages/TragamonedasPage';
 import { BoardApp } from './BoardApp';
+import { playButtonClickSound } from './utils/audio';
 import './App.css';
 
 type Route = '/' | '/caja' | '/tragamonedas';
@@ -89,7 +90,16 @@ export default function App() {
       origReplace.apply(this, args);
       queueMicrotask(onChange);
     };
+    const onGlobalClick = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement | null)?.closest('button, [role="button"]');
+      if (!btn) return;
+      if (btn.classList.contains('btn-generate-map') || btn.classList.contains('cm-sound-btn')) return;
+      playButtonClickSound();
+    };
+    document.addEventListener('click', onGlobalClick, true);
+
     return () => {
+      document.removeEventListener('click', onGlobalClick, true);
       window.removeEventListener('hashchange', onChange);
       window.removeEventListener('popstate', onChange);
       history.pushState = origPush;
